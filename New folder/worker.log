@@ -1,0 +1,104 @@
+2026-09-08 17:01:03,257 | INFO     | worker:start:81 | ============================================================
+2026-09-08 17:01:03,257 | INFO     | worker:start:82 | 🚀 بدء تشغيل المحرك الخلفي المستقل (Background Worker)
+2026-09-08 17:01:03,258 | INFO     | worker:start:83 |    المنصة: BYBIT
+2026-09-08 17:01:03,258 | INFO     | worker:start:84 |    وضع التداول: ورقي (Paper)
+2026-09-08 17:01:03,258 | INFO     | worker:start:85 |    فترة المراقبة: كل 20 ثانية
+2026-09-08 17:01:03,258 | INFO     | worker:start:86 |    الأزواج المراقبة: BTC/USDT, ETH/USDT, SOL/USDT
+2026-09-08 17:01:03,258 | INFO     | worker:start:87 | ============================================================
+2026-09-08 17:01:03,269 | INFO     | worker:start:102 | ✅ تم تهيئة محرك التداول بنجاح
+2026-09-08 17:02:20,000 | INFO     | worker:start:81 | ============================================================
+2026-09-08 17:02:20,000 | INFO     | worker:start:82 | 🚀 بدء تشغيل المحرك الخلفي المستقل (Background Worker)
+2026-09-08 17:02:20,001 | INFO     | worker:start:83 |    المنصة: BYBIT
+2026-09-08 17:02:20,001 | INFO     | worker:start:84 |    وضع التداول: ورقي (Paper)
+2026-09-08 17:02:20,002 | INFO     | worker:start:85 |    فترة المراقبة: كل 20 ثانية
+2026-09-08 17:02:20,002 | INFO     | worker:start:86 |    الأزواج المراقبة: BTC/USDT, ETH/USDT, SOL/USDT
+2026-09-08 17:02:20,002 | INFO     | worker:start:87 | ============================================================
+2026-09-08 17:02:20,026 | INFO     | worker:start:102 | ✅ تم تهيئة محرك التداول بنجاح
+2026-09-08 17:04:09,524 | INFO     | worker:_run_cycle:177 | 📊 ملخص الدورة #10: صفقات مفتوحة: 0 | الرصيد: 4.00$ | إجمالي PnL: +0.0009$
+2026-09-08 17:05:26,608 | INFO     | worker:_run_cycle:177 | 📊 ملخص الدورة #10: صفقات مفتوحة: 0 | الرصيد: 4.00$ | إجمالي PnL: +0.0009$
+2026-09-08 17:07:29,660 | INFO     | worker:_run_cycle:177 | 📊 ملخص الدورة #20: صفقات مفتوحة: 0 | الرصيد: 4.00$ | إجمالي PnL: +0.0009$
+2026-09-08 17:08:46,722 | INFO     | worker:_run_cycle:177 | 📊 ملخص الدورة #20: صفقات مفتوحة: 0 | الرصيد: 4.00$ | إجمالي PnL: +0.0009$
+2026-09-08 17:09:26,292 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 17:09:26,308 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 17:09:26,309 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 17:09:26,361 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 17:09:44,767 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 17:09:44,777 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 17:09:44,777 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 17:09:44,836 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 17:10:49,788 | INFO     | worker:_run_cycle:177 | 📊 ملخص الدورة #30: صفقات مفتوحة: 0 | الرصيد: 4.00$ | إجمالي PnL: +0.0009$
+2026-09-08 17:12:06,877 | INFO     | worker:_run_cycle:177 | 📊 ملخص الدورة #30: صفقات مفتوحة: 0 | الرصيد: 4.00$ | إجمالي PnL: +0.0009$
+2026-09-08 17:39:43,677 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 17:39:43,690 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 17:39:43,690 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 17:39:43,753 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 17:47:25,208 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 17:47:25,222 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 17:47:25,224 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 17:47:25,283 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 17:48:00,316 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 17:48:00,434 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 17:48:00,436 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 17:48:00,720 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 22:04:14,604 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 22:04:14,618 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 22:04:14,618 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 22:04:14,691 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 22:26:51,258 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 22:26:51,271 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 22:26:51,271 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 22:26:55,292 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 22:30:22,762 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 22:30:22,775 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 22:30:22,775 | INFO     | worker:stop:45 | جاري إيقاف محرك التداول الآلي...
+2026-09-08 22:30:22,840 | INFO     | worker:stop:50 | 🛑 تم إيقاف محرك التداول بنجاح.
+2026-09-08 22:37:52,816 | INFO     | worker:_run_loop:53 | بدء حلقة المراقبة والتنفيذ المستمرة...
+2026-09-08 22:37:52,836 | INFO     | worker:start:38 | 🚀 تم تشغيل محرك التداول الآلي في الخلفية (24/7 Daemon).
+2026-09-08 22:41:02,092 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:41:19,946 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:41:45,043 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:42:05,429 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:42:23,767 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:42:43,565 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:43:00,720 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:43:21,426 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:43:40,722 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:43:58,255 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:44:20,307 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:44:43,575 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:45:02,642 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:45:20,360 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:45:38,993 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:45:58,122 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:46:15,287 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:46:33,901 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:46:57,004 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:47:14,112 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:47:35,272 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:48:00,551 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:48:18,396 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:48:39,405 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:48:59,443 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:49:20,338 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:49:55,565 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:50:14,565 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:50:33,546 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:50:53,312 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:51:11,409 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:51:40,452 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:51:57,696 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:52:15,413 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:52:41,816 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:52:59,944 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:53:18,438 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:53:36,050 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:53:58,127 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:54:17,650 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:54:35,442 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:54:53,099 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:55:22,710 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:55:47,694 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:56:04,758 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:56:31,337 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:56:52,391 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
+2026-09-08 22:57:10,525 | WARNING  | worker:_run_loop:68 | تنبيه مسح الفرص الدوري في الخلفية: MarketOpportunityScanner.scan_opportunities() got an unexpected keyword argument 'stop_event'
