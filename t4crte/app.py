@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import time
+import hashlib
+import os
 
 from config import config, TradingConfig
 from trading_engine import TradingEngine
@@ -155,7 +157,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-if getattr(config, "dashboard_password", ""):
+dashboard_pwd_hash = os.environ.get("T4_DASHBOARD_PASSWORD_HASH", "").strip() or os.environ.get("DASHBOARD_PASSWORD_HASH", "").strip() or getattr(config, "dashboard_password_hash", "").strip()
+if not dashboard_pwd_hash and getattr(config, "dashboard_password", ""):
+    dashboard_pwd_hash = hashlib.sha256(config.dashboard_password.encode('utf-8')).hexdigest()
+
+if dashboard_pwd_hash:
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
         
@@ -164,7 +170,8 @@ if getattr(config, "dashboard_password", ""):
         st.markdown("<h2 style='color: #38bdf8; margin-bottom: 20px;'>🔒 تسجيل الدخول</h2>", unsafe_allow_html=True)
         pwd_input = st.text_input("كلمة المرور", type="password", label_visibility="collapsed", placeholder="أدخل كلمة المرور...")
         if st.button("دخول", type="primary", use_container_width=True):
-            if pwd_input == config.dashboard_password:
+            input_hash = hashlib.sha256(pwd_input.encode('utf-8')).hexdigest()
+            if input_hash == dashboard_pwd_hash:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
@@ -203,7 +210,7 @@ with top_c1:
     </div>
     """, unsafe_allow_html=True)
 with top_c2:
-    if getattr(config, "dashboard_password", "") and st.session_state.get("authenticated", False):
+    if dashboard_pwd_hash and st.session_state.get("authenticated", False):
         st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
         if st.button("🚪 خروج", use_container_width=True):
             st.session_state.authenticated = False
@@ -321,7 +328,14 @@ with tab_live:
     # 3. Real-Time Live Auto-Refresh Fragment
     frag_seconds = st.session_state.refresh_interval_sec if st.session_state.auto_refresh_enabled else None
 
-    @st.fragment(run_every=frag_seconds)
+    def safe_fragment(run_every=None):
+        if hasattr(st, "fragment"):
+            return st.fragment(run_every=run_every)
+        def decorator(func):
+            return func
+        return decorator
+
+    @safe_fragment(run_every=frag_seconds)
     def render_live_fragment():
         # Live updates
         engine.update_open_positions()
@@ -1016,6 +1030,10 @@ with tab_settings:
         config.trailing_stop_callback_pct = ts_call
         config.worker_interval_seconds = check_sec
         config.dashboard_password = dash_pwd.strip()
+        if dash_pwd.strip():
+            config.dashboard_password_hash = hashlib.sha256(dash_pwd.strip().encode('utf-8')).hexdigest()
+        else:
+            config.dashboard_password_hash = ""
         config.save_to_json()
         st.success("✅ تم حفظ إعدادات التداول بنجاح!")
         st.rerun()
