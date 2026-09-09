@@ -317,7 +317,7 @@ class TestTradingBotLive(unittest.TestCase):
     def test_live_market_data(self):
         """اختبار جلب بيانات السوق الحية"""
         try:
-            candles = self.engine.fetch_market_candles("BTC/USDT", timeframe="15m", limit=50)
+            candles = self.engine.fetch_market_candles("BTC/USDT", timeframe="15m", limit=250)
         except Exception:
             self.skipTest("لا يتوفر اتصال بالإنترنت")
         

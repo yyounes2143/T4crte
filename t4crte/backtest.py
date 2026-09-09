@@ -211,8 +211,8 @@ if __name__ == "__main__":
     print("🔍 بدء تجربة سريعة للاختبار الرجعي (Backtest Demo)")
     print("=" * 60)
     engine = TradingEngine()
-    print("جاري جلب 200 شمعة حية لاختبار الاستراتيجية...")
-    df = engine.fetch_market_candles("BTC/USDT", timeframe="15m", limit=200)
+    print("جاري جلب 250 شمعة حية لاختبار الاستراتيجية...")
+    df = engine.fetch_market_candles("BTC/USDT", timeframe="15m", limit=250)
     if not df.empty:
         results = BacktestEngine.run_backtest(df, pair="BTC/USDT", initial_balance=100.0, trade_amount=20.0)
         print(f"الزوج: {results['pair']}")
