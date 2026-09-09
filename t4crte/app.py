@@ -339,7 +339,6 @@ with tab_live:
     @safe_fragment(run_every=frag_seconds)
     def render_live_fragment():
         # Live updates
-        engine.update_open_positions()
         live_portfolio = engine.get_portfolio_state()
         curr_active_pair = st.session_state.active_pair
 
@@ -470,17 +469,14 @@ with tab_live:
                         st.warning("⏳ يرجى الانتظار 3 ثوانٍ قبل تنفيذ صفقة جديدة لمنع التكرار.")
                     else:
                         st.session_state.last_buy_click = current_time
-                        if live_portfolio['usdt_balance'] < config.trade_amount_usdt:
+                        if not worker_running:
+                            st.warning("شغّل المحرك الآلي أولاً")
+                        elif live_portfolio['usdt_balance'] < config.trade_amount_usdt:
                             st.error("الرصيد المتاح غير كافٍ لفتح الصفقة!")
                         else:
-                            res = engine.open_position(curr_active_pair, ai_res.current_price, config.trade_amount_usdt, is_paper=config.is_paper_trading)
-                            tid = res[0] if isinstance(res, tuple) else res
-                            msg = res[1] if isinstance(res, tuple) and len(res) > 1 else ""
-                            if tid:
-                                st.success(f"تم فتح الصفقة بنجاح على {curr_active_pair}!")
-                                st.rerun()
-                            else:
-                                st.error(msg or "تم رفض فتح الصفقة")
+                            cmd_id = engine.add_command('OPEN', pair=curr_active_pair, amount_usdt=config.trade_amount_usdt)
+                            st.toast(f"تم إدراج أمر شراء لـ {curr_active_pair} (في الانتظار) ⏳", icon="📥")
+                            st.rerun()
 
         # Chart Section
         if not candles_df.empty:
@@ -534,9 +530,8 @@ with tab_live:
                     st.markdown(f"**الهدف:** {t['take_profit_price']:.2f}$<br>**الوقف المتحرك:** {t['trailing_stop_price']:.2f}$", unsafe_allow_html=True)
                 with c6:
                     if st.button("❌ إغلاق يدوي فوري", key=f"close_{t['id']}", use_container_width=True):
-                        curr_p = engine.get_current_price(t['pair'])
-                        engine.close_position(t['id'], curr_p, "إغلاق يدوي فوري من الواجهة ✋")
-                        st.toast(f"تم إغلاق {t['pair']} يدوياً!", icon="✅")
+                        engine.add_command('CLOSE', pair=t['pair'], trade_id=t['id'])
+                        st.toast(f"تم إدراج أمر إغلاق صفقة #{t['id']} (في الانتظار) ⏳", icon="📥")
                         st.rerun()
                 st.markdown("<hr style='margin: 8px 0; border-color: #334155;'>", unsafe_allow_html=True)
 
@@ -1054,10 +1049,6 @@ with tab_settings:
             st.rerun()
     with c_kill:
         if st.button("🚨 إيقاف طارئ وتسييل فوري لكافة الصفقات (Kill Switch)", type="primary", use_container_width=True):
-            open_t = engine.get_open_trades()
-            for t in open_t:
-                cp = engine.get_current_price(t['pair'])
-                engine.close_position(t['id'], cp, "إغلاق طارئ يدوي (Emergency Kill Switch) 🚨")
-            TelegramNotifier.notify_kill_switch(len(open_t))
-            st.toast("تم تسييل كافة الصفقات المفتوحة فوراً!", icon="🚨")
+            engine.add_command('KILL')
+            st.toast("تم إدراج أمر التسييل الطارئ (Kill Switch) 🚨", icon="🚨")
             st.rerun()

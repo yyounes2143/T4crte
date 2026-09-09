@@ -50,7 +50,7 @@ class BackgroundWorker:
         self._start_time: Optional[datetime] = None
         self._last_heartbeat: Optional[datetime] = None
 
-    def _write_status(self, status: str, details: str = ""):
+    def _write_status(self, status: str, details: str = "", cycle_duration_ms: int = 0):
         """كتابة حالة الـ Worker في ملف JSON لقراءتها من الواجهة"""
         import json
         data = {
@@ -62,6 +62,7 @@ class BackgroundWorker:
             "total_cycles": self._total_cycles,
             "total_events": self._total_events,
             "consecutive_errors": self._consecutive_errors,
+            "cycle_duration_ms": cycle_duration_ms,
         }
         try:
             tmp_file = STATUS_FILE + ".tmp"
@@ -162,10 +163,21 @@ class BackgroundWorker:
     def _run_cycle(self):
         """تنفيذ دورة مراقبة واحدة مع دعم التداول الآلي"""
         self._total_cycles += 1
+        cycle_start = time.time()
 
         # إعادة قراءة الإعدادات لالتقاط التغييرات الفورية من الواجهة
         from config import TradingConfig
         current_cfg = TradingConfig.load_from_json()
+
+        # 0. معالجة الأوامر المعلقة من الواجهة (OPEN / CLOSE / KILL)
+        try:
+            cmd_results = self._engine.process_pending_commands()
+            if cmd_results:
+                self._total_events += len(cmd_results)
+                for res in cmd_results:
+                    logger.info(f"⚡ تم تنفيذ أمر من الواجهة: {res}")
+        except Exception as cmd_err:
+            logger.error(f"خطأ أثناء معالجة الأوامر المعلقة: {cmd_err}")
 
         # 1. تحديث الصفقات المفتوحة (الوقف، الهدف، الوقف المتحرك)
         events = self._engine.update_open_positions()
@@ -236,6 +248,16 @@ class BackgroundWorker:
                 f"الرصيد: {portfolio['usdt_balance']:.2f}$ | "
                 f"إجمالي PnL: {portfolio['total_pnl']:+.4f}$"
             )
+
+        # حساب زمن الدورة ومقارنته بالفريم الزمني
+        cycle_duration_ms = int((time.time() - cycle_start) * 1000)
+        from trading_engine import _timeframe_to_seconds
+        tf_seconds = _timeframe_to_seconds(current_cfg.timeframe)
+        if (time.time() - cycle_start) > (0.8 * tf_seconds):
+            logger.warning(
+                f"⚠️ تحذير: استغرقت دورة المحرك {cycle_duration_ms} ميلي ثانية وهي تتجاوز 80% من فترة الفريم ({current_cfg.timeframe} = {tf_seconds}s)"
+            )
+        self._write_status("RUNNING", f"آخر دورة: {datetime.now().strftime('%H:%M:%S')}", cycle_duration_ms=cycle_duration_ms)
 
     def _interruptible_sleep(self, seconds: float):
         """نوم قابل للمقاطعة — يتوقف فوراً عند إشارة الإيقاف"""

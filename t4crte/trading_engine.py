@@ -4,6 +4,7 @@ import datetime
 import json
 import time
 import functools
+import threading
 import ccxt
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
@@ -56,22 +57,38 @@ POPULAR_PAIRS = [
 ]
 
 
+def _timeframe_to_seconds(tf: str) -> float:
+    """تحويل ترميز الفريم الزمني (مثل 1m, 15m, 1h) إلى ثوانٍ"""
+    units = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400, 'w': 604800}
+    tf = (tf or "").strip().lower()
+    if tf and tf[-1] in units:
+        try:
+            return float(tf[:-1]) * units[tf[-1]]
+        except ValueError:
+            pass
+    return 900.0  # افتراضي 15 دقيقة = 900 ثانية
+
+
 class TradingEngine:
+    _lock = threading.RLock()
+
     def __init__(self, db_path: str = None):
         self.db_path = db_path or config.db_path
         self._cached_spot_pairs: List[str] = []
         self._last_spot_pairs_time: float = 0
+        self._candle_cache: Dict[Tuple[str, str], Tuple[float, pd.DataFrame]] = {}
+        self._price_cache: Dict[str, Tuple[float, float]] = {}
         self.init_db()
         self._exchange = None
         self._init_exchange()
 
     @contextmanager
     def _db_connection(self):
-        """مدير سياق آمن لفتح وإغلاق اتصالات SQLite مع وضع WAL"""
-        conn = sqlite3.connect(self.db_path, timeout=10)
+        """مدير سياق آمن لفتح وإغلاق اتصالات SQLite مع وضع WAL ورخص القفل المتوازي"""
+        conn = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA busy_timeout=10000")
             yield conn
         finally:
             conn.close()
@@ -94,127 +111,243 @@ class TradingEngine:
             logger.info(f"تم تهيئة الاتصال بمنصة {config.exchange_id.upper()} بنجاح")
         except Exception as e:
             logger.error(f"خطأ في تهيئة المنصة ({config.exchange_id}): {e}. الرجوع إلى Bybit الافتراضية.")
-            self._exchange = ccxt.bybit({'enableRateLimit': True})
+            self._exchange = ccxt.bybit({'enableRateLimit': True, 'timeout': 15000})
         self.exchange_rules = ExchangeRules(self._exchange)
 
     def init_db(self):
         """إنشاء جداول قاعدة البيانات إذا لم تكن موجودة"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            cursor = conn.cursor()
-            
-            # جدول الصفقات
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    pair TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    entry_price REAL NOT NULL,
-                    current_price REAL NOT NULL,
-                    amount REAL NOT NULL,
-                    cost REAL NOT NULL,
-                    highest_price REAL NOT NULL,
-                    trailing_stop_price REAL NOT NULL,
-                    take_profit_price REAL NOT NULL,
-                    stop_loss_price REAL NOT NULL,
-                    status TEXT NOT NULL,  -- 'OPEN' or 'CLOSED'
-                    exit_price REAL,
-                    exit_reason TEXT,
-                    pnl_amount REAL DEFAULT 0.0,
-                    pnl_pct REAL DEFAULT 0.0,
-                    entry_time TEXT NOT NULL,
-                    exit_time TEXT,
-                    is_paper INTEGER DEFAULT 1,
-                    entry_fee REAL DEFAULT 0.0,
-                    exit_fee REAL DEFAULT 0.0
-                )
-            """)
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
 
-            # أضف أعمدة DB الجديدة (entry_fee, exit_fee) بطريقة آمنة
-            try:
-                cursor.execute("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0.0")
-            except sqlite3.OperationalError:
-                pass
-
-            try:
-                cursor.execute("ALTER TABLE trades ADD COLUMN exit_fee REAL DEFAULT 0.0")
-            except sqlite3.OperationalError:
-                pass
-
-            # جدول المحفظة والرصيد
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS portfolio (
-                    id INTEGER PRIMARY KEY,
-                    usdt_balance REAL NOT NULL,
-                    initial_balance REAL NOT NULL,
-                    total_realized_pnl REAL DEFAULT 0.0,
-                    win_trades INTEGER DEFAULT 0,
-                    loss_trades INTEGER DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-
-            # جدول سجل استشارات الذكاء الاصطناعي
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ai_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    pair TEXT NOT NULL,
-                    signal TEXT NOT NULL,
-                    confidence INTEGER,
-                    safety_score INTEGER,
-                    sentiment TEXT,
-                    summary TEXT,
-                    details TEXT
-                )
-            """)
-
-            # التأكد من وجود سجل رصيد أولي
-            cursor.execute("SELECT COUNT(*) FROM portfolio WHERE id = 1")
-            if cursor.fetchone()[0] == 0:
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # جدول الصفقات
                 cursor.execute("""
-                    INSERT INTO portfolio (id, usdt_balance, initial_balance, total_realized_pnl, win_trades, loss_trades, updated_at)
-                    VALUES (1, ?, ?, 0.0, 0, 0, ?)
-                """, (config.initial_balance, config.initial_balance, now))
-
-            # جدول حالة عامل التشغيل في الخلفية
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS bot_worker_state (
-                    id INTEGER PRIMARY KEY,
-                    is_running INTEGER DEFAULT 0,
-                    last_heartbeat TEXT,
-                    cycle_count INTEGER DEFAULT 0,
-                    last_message TEXT
-                )
-            """)
-            cursor.execute("SELECT COUNT(*) FROM bot_worker_state WHERE id = 1")
-            if cursor.fetchone()[0] == 0:
-                cursor.execute("""
-                    INSERT INTO bot_worker_state (id, is_running, last_heartbeat, cycle_count, last_message)
-                    VALUES (1, 0, NULL, 0, 'المحرك متوقف')
+                    CREATE TABLE IF NOT EXISTS trades (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        pair TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        entry_price REAL NOT NULL,
+                        current_price REAL NOT NULL,
+                        amount REAL NOT NULL,
+                        cost REAL NOT NULL,
+                        highest_price REAL NOT NULL,
+                        trailing_stop_price REAL NOT NULL,
+                        take_profit_price REAL NOT NULL,
+                        stop_loss_price REAL NOT NULL,
+                        status TEXT NOT NULL,  -- 'OPEN' or 'CLOSED'
+                        exit_price REAL,
+                        exit_reason TEXT,
+                        pnl_amount REAL DEFAULT 0.0,
+                        pnl_pct REAL DEFAULT 0.0,
+                        entry_time TEXT NOT NULL,
+                        exit_time TEXT,
+                        is_paper INTEGER DEFAULT 1,
+                        entry_fee REAL DEFAULT 0.0,
+                        exit_fee REAL DEFAULT 0.0
+                    )
                 """)
 
-            # جدول سجل نتائج مسح واقتناص الفرص
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS scanner_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    scan_time TEXT NOT NULL,
-                    pair TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    change_24h REAL NOT NULL,
-                    volume_24h REAL,
-                    rsi REAL,
-                    opportunity_score INTEGER,
-                    signal TEXT,
-                    signal_arabic TEXT,
-                    reasons TEXT
-                )
-            """)
-            
-            conn.commit()
-        finally:
-            conn.close()
+                # أضف أعمدة DB الجديدة (entry_fee, exit_fee) بطريقة آمنة
+                try:
+                    cursor.execute("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0.0")
+                except sqlite3.OperationalError:
+                    pass
+
+                try:
+                    cursor.execute("ALTER TABLE trades ADD COLUMN exit_fee REAL DEFAULT 0.0")
+                except sqlite3.OperationalError:
+                    pass
+
+                # جدول المحفظة والرصيد
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS portfolio (
+                        id INTEGER PRIMARY KEY,
+                        usdt_balance REAL NOT NULL,
+                        initial_balance REAL NOT NULL,
+                        total_realized_pnl REAL DEFAULT 0.0,
+                        win_trades INTEGER DEFAULT 0,
+                        loss_trades INTEGER DEFAULT 0,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+
+                # جدول سجل استشارات الذكاء الاصطناعي
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS ai_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        pair TEXT NOT NULL,
+                        signal TEXT NOT NULL,
+                        confidence INTEGER,
+                        safety_score INTEGER,
+                        sentiment TEXT,
+                        summary TEXT,
+                        details TEXT
+                    )
+                """)
+
+                # التأكد من وجود سجل رصيد أولي
+                cursor.execute("SELECT COUNT(*) FROM portfolio WHERE id = 1")
+                if cursor.fetchone()[0] == 0:
+                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute("""
+                        INSERT INTO portfolio (id, usdt_balance, initial_balance, total_realized_pnl, win_trades, loss_trades, updated_at)
+                        VALUES (1, ?, ?, 0.0, 0, 0, ?)
+                    """, (config.initial_balance, config.initial_balance, now))
+
+                # جدول حالة عامل التشغيل في الخلفية
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_worker_state (
+                        id INTEGER PRIMARY KEY,
+                        is_running INTEGER DEFAULT 0,
+                        last_heartbeat TEXT,
+                        cycle_count INTEGER DEFAULT 0,
+                        last_message TEXT
+                    )
+                """)
+                cursor.execute("SELECT COUNT(*) FROM bot_worker_state WHERE id = 1")
+                if cursor.fetchone()[0] == 0:
+                    cursor.execute("""
+                        INSERT INTO bot_worker_state (id, is_running, last_heartbeat, cycle_count, last_message)
+                        VALUES (1, 0, NULL, 0, 'المحرك متوقف')
+                    """)
+
+                # جدول سجل نتائج مسح واقتناص الفرص
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS scanner_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        scan_time TEXT NOT NULL,
+                        pair TEXT NOT NULL,
+                        price REAL NOT NULL,
+                        change_24h REAL NOT NULL,
+                        volume_24h REAL,
+                        rsi REAL,
+                        opportunity_score INTEGER,
+                        signal TEXT,
+                        signal_arabic TEXT,
+                        reasons TEXT
+                    )
+                """)
+
+                # جدول أوامر التحكم والتنفيذ (Commands)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS commands (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        type TEXT NOT NULL,
+                        pair TEXT,
+                        trade_id INTEGER,
+                        amount_usdt REAL,
+                        created_at TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'PENDING',
+                        result TEXT
+                    )
+                """)
+
+                conn.commit()
+
+    # =========================================================
+    # إدارة الأوامر (Commands)
+    # =========================================================
+    def add_command(self, type: str, pair: str = None, trade_id: int = None, amount_usdt: float = None) -> int:
+        """إدراج أمر جديد حالة PENDING للتنفيذ بواسطة الـ worker"""
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO commands (type, pair, trade_id, amount_usdt, created_at, status)
+                    VALUES (?, ?, ?, ?, ?, 'PENDING')
+                """, (type, pair, trade_id, amount_usdt, now))
+                conn.commit()
+                return cursor.lastrowid
+
+    def get_pending_commands(self) -> List[Dict[str, Any]]:
+        """جلب الأوامر المعلقة"""
+        with self._db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM commands WHERE status = 'PENDING' ORDER BY id ASC")
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_command_status(self, cmd_id: int, status: str, result: str = None):
+        """تحديث حالة الأمر والملاحظات"""
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE commands SET status = ?, result = ? WHERE id = ?
+                """, (status, result, cmd_id))
+                conn.commit()
+
+    def process_pending_commands(self) -> List[Dict[str, Any]]:
+        """معالجة كافة الأوامر المعلقة بواسطة الـ worker"""
+        pending = self.get_pending_commands()
+        results = []
+        for cmd in pending:
+            cmd_id = cmd['id']
+            cmd_type = cmd['type']
+            pair = cmd.get('pair')
+            trade_id = cmd.get('trade_id')
+            amount_usdt = cmd.get('amount_usdt') or config.trade_amount_usdt
+
+            try:
+                if cmd_type == 'OPEN':
+                    current_price = self.get_current_price(pair) if pair else 0.0
+                    res = self.open_position(pair, current_price, amount_usdt, is_paper=config.is_paper_trading)
+                    tid = res[0] if isinstance(res, tuple) else res
+                    msg = res[1] if isinstance(res, tuple) and len(res) > 1 else ""
+                    if tid:
+                        res_msg = f"تم فتح الصفقة بنجاح على {pair} (#{tid})"
+                        self.update_command_status(cmd_id, 'DONE', res_msg)
+                        results.append({'id': cmd_id, 'status': 'DONE', 'result': res_msg})
+                    else:
+                        res_msg = msg or "فشل فتح الصفقة"
+                        self.update_command_status(cmd_id, 'FAILED', res_msg)
+                        results.append({'id': cmd_id, 'status': 'FAILED', 'result': res_msg})
+
+                elif cmd_type == 'CLOSE':
+                    if trade_id:
+                        if not pair:
+                            with self._db_connection() as conn:
+                                cursor = conn.cursor()
+                                cursor.execute("SELECT pair FROM trades WHERE id = ?", (trade_id,))
+                                r = cursor.fetchone()
+                                if r:
+                                    pair = r[0]
+                        current_price = self.get_current_price(pair) if pair else 0.0
+                        self.close_position(trade_id, current_price, "إغلاق يدوي من الواجهة ✋")
+                        res_msg = f"تم إغلاق الصفقة #{trade_id} يدوياً"
+                        self.update_command_status(cmd_id, 'DONE', res_msg)
+                        results.append({'id': cmd_id, 'status': 'DONE', 'result': res_msg})
+                    else:
+                        self.update_command_status(cmd_id, 'FAILED', "رقم الصفقة غير موجود")
+                        results.append({'id': cmd_id, 'status': 'FAILED', 'result': "رقم الصفقة غير موجود"})
+
+                elif cmd_type == 'KILL':
+                    open_trades = self.get_open_trades()
+                    for t in open_trades:
+                        cp = self.get_current_price(t['pair'])
+                        self.close_position(t['id'], cp, "إغلاق طارئ يدوي (Emergency Kill Switch) 🚨")
+                    try:
+                        from notifier import TelegramNotifier
+                        TelegramNotifier.notify_kill_switch(len(open_trades))
+                    except Exception:
+                        pass
+                    res_msg = f"تم إغلاق كافة الصفقات ({len(open_trades)})"
+                    self.update_command_status(cmd_id, 'DONE', res_msg)
+                    results.append({'id': cmd_id, 'status': 'DONE', 'result': res_msg})
+
+                else:
+                    self.update_command_status(cmd_id, 'FAILED', f"نوع أمر غير معروف: {cmd_type}")
+                    results.append({'id': cmd_id, 'status': 'FAILED', 'result': f"نوع أمر غير معروف: {cmd_type}"})
+
+            except Exception as e:
+                err_msg = f"خطأ أثناء تنفيذ الأمر: {e}"
+                logger.error(err_msg)
+                self.update_command_status(cmd_id, 'FAILED', err_msg)
+                results.append({'id': cmd_id, 'status': 'FAILED', 'result': err_msg})
+
+        return results
 
     def get_portfolio_state(self) -> Dict[str, Any]:
         """الحصول على الحالة اللحظية للمحفظة والرصيد"""
@@ -256,27 +389,40 @@ class TradingEngine:
 
     def reset_paper_balance(self, new_balance: float = 4.0):
         """إعادة تعيين الرصيد التجريبي ومسح الصفقات التجريبية"""
-        with self._db_connection() as conn:
-            cursor = conn.cursor()
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("""
-                UPDATE portfolio 
-                SET usdt_balance = ?, initial_balance = ?, total_realized_pnl = 0.0, win_trades = 0, loss_trades = 0, updated_at = ?
-                WHERE id = 1
-            """, (new_balance, new_balance, now))
-            cursor.execute("DELETE FROM trades WHERE is_paper = 1")
-            cursor.execute("DELETE FROM ai_logs")
-            conn.commit()
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute("""
+                    UPDATE portfolio
+                    SET usdt_balance = ?, initial_balance = ?, total_realized_pnl = 0.0, win_trades = 0, loss_trades = 0, updated_at = ?
+                    WHERE id = 1
+                """, (new_balance, new_balance, now))
+                cursor.execute("DELETE FROM trades WHERE is_paper = 1")
+                cursor.execute("DELETE FROM ai_logs")
+                conn.commit()
 
     @_retry_on_network_error(max_retries=3, base_delay=2.0)
     def fetch_market_candles(self, pair: str, timeframe: str = "15m", limit: int = 250) -> pd.DataFrame:
-        """جلب بيانات الشموع الحية من المنصة مع حساب المؤشرات الفنية"""
+        """جلب بيانات الشموع الحية من المنصة مع حساب المؤشرات الفنية والكاش المؤقت"""
+        now = time.time()
+        tf_sec = _timeframe_to_seconds(timeframe)
+        ttl = max(10.0, tf_sec / 6.0)
+        cache_key = (pair, timeframe)
+
+        if cache_key in self._candle_cache:
+            cached_ts, cached_df = self._candle_cache[cache_key]
+            if (now - cached_ts) < ttl and not cached_df.empty:
+                return cached_df.copy()
+
         try:
             ohlcv = self._exchange.fetch_ohlcv(pair, timeframe=timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
             df = TechnicalIndicators.enrich_dataframe(df)
             logger.debug(f"تم جلب {len(df)} شمعة لـ {pair} ({timeframe})")
+            if not df.empty:
+                self._candle_cache[cache_key] = (now, df)
             return df
         except (ccxt.NetworkError, ccxt.RequestTimeout, ccxt.ExchangeNotAvailable, ccxt.RateLimitExceeded):
             raise  # يتم معالجتها بواسطة مُزيِّن الإعادة
@@ -286,13 +432,20 @@ class TradingEngine:
 
     @_retry_on_network_error(max_retries=3, base_delay=1.5)
     def get_current_price(self, pair: str) -> float:
-        """جلب السعر الحالي الفوري للزوج"""
+        """جلب السعر الحالي الفوري للزوج مع الكاش (2 ثانية)"""
+        now = time.time()
+        if pair in self._price_cache:
+            cached_ts, cached_price = self._price_cache[pair]
+            if (now - cached_ts) < 2.0 and cached_price > 0:
+                return cached_price
+
         try:
             ticker = self._exchange.fetch_ticker(pair)
             price = float(ticker['last'] or ticker['close'])
             if price <= 0:
                 logger.warning(f"سعر غير صالح لـ {pair}: {price}")
                 return 0.0
+            self._price_cache[pair] = (now, price)
             return price
         except (ccxt.NetworkError, ccxt.RequestTimeout, ccxt.ExchangeNotAvailable, ccxt.RateLimitExceeded):
             raise  # يتم معالجتها بواسطة مُزيِّن الإعادة
@@ -414,7 +567,7 @@ class TradingEngine:
                 'apiKey': api_key.strip(),
                 'secret': api_secret.strip(),
                 'enableRateLimit': True,
-                'timeout': 10000,
+                'timeout': 15000,
                 'options': {'defaultType': 'spot'}
             }
             if passphrase and passphrase.strip():
@@ -471,214 +624,217 @@ class TradingEngine:
 
     def set_worker_state(self, is_running: bool, cycle_inc: bool = False, message: str = None):
         """تحديث حالة المحرك ونبضات النشاط"""
-        with self._db_connection() as conn:
-            cursor = conn.cursor()
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if cycle_inc:
-                cursor.execute("""
-                    UPDATE bot_worker_state 
-                    SET is_running = ?, last_heartbeat = ?, cycle_count = cycle_count + 1, last_message = COALESCE(?, last_message)
-                    WHERE id = 1
-                """, (1 if is_running else 0, now, message))
-            else:
-                cursor.execute("""
-                    UPDATE bot_worker_state 
-                    SET is_running = ?, last_heartbeat = ?, last_message = COALESCE(?, last_message)
-                    WHERE id = 1
-                """, (1 if is_running else 0, now, message))
-            conn.commit()
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if cycle_inc:
+                    cursor.execute("""
+                        UPDATE bot_worker_state
+                        SET is_running = ?, last_heartbeat = ?, cycle_count = cycle_count + 1, last_message = COALESCE(?, last_message)
+                        WHERE id = 1
+                    """, (1 if is_running else 0, now, message))
+                else:
+                    cursor.execute("""
+                        UPDATE bot_worker_state
+                        SET is_running = ?, last_heartbeat = ?, last_message = COALESCE(?, last_message)
+                        WHERE id = 1
+                    """, (1 if is_running else 0, now, message))
+                conn.commit()
 
     def open_position(self, pair: str, current_price: float, amount_usdt: float, is_paper: bool = True) -> Tuple[Optional[int], str]:
         """فتح صفقة شراء جديدة مع ضبط الوقف وأخذ الربح ومحاكاة الرسوم والانزلاق"""
         if current_price <= 0:
             return None, "سعر غير صالح"
 
-        with self._db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT usdt_balance FROM portfolio WHERE id = 1")
-            balance = cursor.fetchone()[0]
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT usdt_balance FROM portfolio WHERE id = 1")
+                balance = cursor.fetchone()[0]
 
-            if balance < amount_usdt:
-                msg = f"رصيد غير كافٍ لفتح صفقة {pair}: المتاح {balance:.2f}$ < المطلوب {amount_usdt:.2f}$"
-                logger.warning(msg)
-                return None, msg
-
-            # Check open positions limit
-            cursor.execute("SELECT COUNT(*) FROM trades WHERE status = 'OPEN'")
-            open_count = cursor.fetchone()[0]
-            if open_count >= config.max_open_trades:
-                msg = f"تم بلوغ الحد الأقصى للصفقات المفتوحة ({config.max_open_trades}). لن يتم فتح صفقة جديدة."
-                logger.info(msg)
-                return None, msg
-
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            if is_paper:
-                slippage = getattr(config, 'paper_slippage_pct', 0.05)
-                fee_pct = getattr(config, 'paper_fee_pct', 0.1)
-
-                fill_price = current_price * (1 + (slippage / 100))
-                raw_amount = amount_usdt / fill_price
-                amount = self.exchange_rules.round_amount(pair, raw_amount)
-
-                is_valid, val_msg = self.exchange_rules.validate_order(pair, amount, fill_price)
-                if not is_valid:
-                    logger.warning(f"رفض أمر التداول التجريبي لـ {pair}: {val_msg}")
-                    return None, val_msg
-
-                cost = amount * fill_price
-                fee_usdt = cost * (fee_pct / 100)
-                total_deduction = cost + fee_usdt
-
-                if balance < total_deduction:
-                    msg = f"الرصيد المتاح ({balance:.2f}$) غير كافٍ لتغطية التكلفة والرسوم ({total_deduction:.2f}$)"
+                if balance < amount_usdt:
+                    msg = f"رصيد غير كافٍ لفتح صفقة {pair}: المتاح {balance:.2f}$ < المطلوب {amount_usdt:.2f}$"
                     logger.warning(msg)
                     return None, msg
 
-                actual_price = fill_price
-                actual_qty = amount
-                actual_cost = cost
-                entry_fee = fee_usdt
-
-            else:
-                raw_amount = amount_usdt / current_price
-                is_valid, val_msg = self.exchange_rules.validate_order(pair, raw_amount, current_price)
-                if not is_valid:
-                    logger.warning(f"رفض أمر التداول الحقيقي لـ {pair}: {val_msg}")
-                    return None, val_msg
-
-                try:
-                    qty = self.exchange_rules.round_amount(pair, raw_amount)
-                    order = self._exchange.create_market_buy_order(pair, qty)
-                    actual_price = float(order.get('average', order.get('price', current_price)) or current_price)
-                    actual_qty = float(order.get('filled', qty) or qty)
-                    actual_cost = actual_qty * actual_price
-                    fee_rate = self.exchange_rules.taker_fee(pair)
-                    entry_fee = actual_cost * fee_rate
-                    total_deduction = actual_cost + entry_fee
-                    logger.info(f"✅ تم تنفيذ أمر شراء حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_price:.2f}$")
-                except Exception as e:
-                    msg = f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}"
-                    logger.error(msg)
+                # Check open positions limit
+                cursor.execute("SELECT COUNT(*) FROM trades WHERE status = 'OPEN'")
+                open_count = cursor.fetchone()[0]
+                if open_count >= config.max_open_trades:
+                    msg = f"تم بلوغ الحد الأقصى للصفقات المفتوحة ({config.max_open_trades}). لن يتم فتح صفقة جديدة."
+                    logger.info(msg)
                     return None, msg
 
-            take_profit = actual_price * (1 + (config.take_profit_pct / 100))
-            stop_loss = actual_price * (1 - (config.stop_loss_pct / 100))
-            trailing_stop = stop_loss
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            cursor.execute("""
-                INSERT INTO trades (
-                    pair, side, entry_price, current_price, amount, cost, highest_price,
-                    trailing_stop_price, take_profit_price, stop_loss_price, status,
-                    entry_time, is_paper, entry_fee
-                ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
-            """, (
-                pair, actual_price, actual_price, actual_qty, actual_cost, actual_price,
-                trailing_stop, take_profit, stop_loss, now, 1 if is_paper else 0, entry_fee
-            ))
-            trade_id = cursor.lastrowid
+                if is_paper:
+                    slippage = getattr(config, 'paper_slippage_pct', 0.05)
+                    fee_pct = getattr(config, 'paper_fee_pct', 0.1)
 
-            # Deduct total cost + fee from portfolio balance
-            cursor.execute("UPDATE portfolio SET usdt_balance = usdt_balance - ? WHERE id = 1", (total_deduction,))
-            conn.commit()
+                    fill_price = current_price * (1 + (slippage / 100))
+                    raw_amount = amount_usdt / fill_price
+                    amount = self.exchange_rules.round_amount(pair, raw_amount)
 
-            trade_mode = "ورقية" if is_paper else "حقيقية"
-            logger.info(
-                f"📈 فتح صفقة {trade_mode} #{trade_id} | {pair} | "
-                f"سعر الدخول: {actual_price:.4f}$ | الكمية: {actual_qty} | "
-                f"التكلفة: {actual_cost:.2f}$ | الرسوم: {entry_fee:.4f}$ | الهدف: {take_profit:.2f}$ | الوقف: {stop_loss:.2f}$"
-            )
-            try:
-                from notifier import TelegramNotifier
-                TelegramNotifier.notify_trade_opened(
-                    pair, actual_price, actual_qty, actual_cost, take_profit, stop_loss, is_paper
+                    is_valid, val_msg = self.exchange_rules.validate_order(pair, amount, fill_price)
+                    if not is_valid:
+                        logger.warning(f"رفض أمر التداول التجريبي لـ {pair}: {val_msg}")
+                        return None, val_msg
+
+                    cost = amount * fill_price
+                    fee_usdt = cost * (fee_pct / 100)
+                    total_deduction = cost + fee_usdt
+
+                    if balance < total_deduction:
+                        msg = f"الرصيد المتاح ({balance:.2f}$) غير كافٍ لتغطية التكلفة والرسوم ({total_deduction:.2f}$)"
+                        logger.warning(msg)
+                        return None, msg
+
+                    actual_price = fill_price
+                    actual_qty = amount
+                    actual_cost = cost
+                    entry_fee = fee_usdt
+
+                else:
+                    raw_amount = amount_usdt / current_price
+                    is_valid, val_msg = self.exchange_rules.validate_order(pair, raw_amount, current_price)
+                    if not is_valid:
+                        logger.warning(f"رفض أمر التداول الحقيقي لـ {pair}: {val_msg}")
+                        return None, val_msg
+
+                    try:
+                        qty = self.exchange_rules.round_amount(pair, raw_amount)
+                        order = self._exchange.create_market_buy_order(pair, qty)
+                        actual_price = float(order.get('average', order.get('price', current_price)) or current_price)
+                        actual_qty = float(order.get('filled', qty) or qty)
+                        actual_cost = actual_qty * actual_price
+                        fee_rate = self.exchange_rules.taker_fee(pair)
+                        entry_fee = actual_cost * fee_rate
+                        total_deduction = actual_cost + entry_fee
+                        logger.info(f"✅ تم تنفيذ أمر شراء حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_price:.2f}$")
+                    except Exception as e:
+                        msg = f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}"
+                        logger.error(msg)
+                        return None, msg
+
+                take_profit = actual_price * (1 + (config.take_profit_pct / 100))
+                stop_loss = actual_price * (1 - (config.stop_loss_pct / 100))
+                trailing_stop = stop_loss
+
+                cursor.execute("""
+                    INSERT INTO trades (
+                        pair, side, entry_price, current_price, amount, cost, highest_price,
+                        trailing_stop_price, take_profit_price, stop_loss_price, status,
+                        entry_time, is_paper, entry_fee
+                    ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+                """, (
+                    pair, actual_price, actual_price, actual_qty, actual_cost, actual_price,
+                    trailing_stop, take_profit, stop_loss, now, 1 if is_paper else 0, entry_fee
+                ))
+                trade_id = cursor.lastrowid
+
+                # Deduct total cost + fee from portfolio balance
+                cursor.execute("UPDATE portfolio SET usdt_balance = usdt_balance - ? WHERE id = 1", (total_deduction,))
+                conn.commit()
+
+                trade_mode = "ورقية" if is_paper else "حقيقية"
+                logger.info(
+                    f"📈 فتح صفقة {trade_mode} #{trade_id} | {pair} | "
+                    f"سعر الدخول: {actual_price:.4f}$ | الكمية: {actual_qty} | "
+                    f"التكلفة: {actual_cost:.2f}$ | الرسوم: {entry_fee:.4f}$ | الهدف: {take_profit:.2f}$ | الوقف: {stop_loss:.2f}$"
                 )
-            except Exception:
-                pass
-            return trade_id, "تم فتح الصفقة بنجاح"
+                try:
+                    from notifier import TelegramNotifier
+                    TelegramNotifier.notify_trade_opened(
+                        pair, actual_price, actual_qty, actual_cost, take_profit, stop_loss, is_paper
+                    )
+                except Exception:
+                    pass
+                return trade_id, "تم فتح الصفقة بنجاح"
 
     def close_position(self, trade_id: int, exit_price: float, reason: str):
         """إغلاق صفقة معينة واحتساب الأرباح المحققة وتحديث الرصيد محاكاة الرسوم والانزلاق"""
-        with self._db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT cost, amount, entry_price, pair, COALESCE(entry_fee, 0.0), is_paper FROM trades WHERE id = ? AND status = 'OPEN'", (trade_id,))
-            row = cursor.fetchone()
-            if not row:
-                logger.warning(f"محاولة إغلاق صفقة غير موجودة أو مغلقة مسبقاً: #{trade_id}")
-                return
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT cost, amount, entry_price, pair, COALESCE(entry_fee, 0.0), is_paper FROM trades WHERE id = ? AND status = 'OPEN'", (trade_id,))
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"محاولة إغلاق صفقة غير موجودة أو مغلقة مسبقاً: #{trade_id}")
+                    return
 
-            cost, amount, entry_price, pair, entry_fee, is_paper_val = row
-            is_paper_trade = bool(is_paper_val)
+                cost, amount, entry_price, pair, entry_fee, is_paper_val = row
+                is_paper_trade = bool(is_paper_val)
 
-            if is_paper_trade:
-                slippage = getattr(config, 'paper_slippage_pct', 0.05)
-                fee_pct = getattr(config, 'paper_fee_pct', 0.1)
+                if is_paper_trade:
+                    slippage = getattr(config, 'paper_slippage_pct', 0.05)
+                    fee_pct = getattr(config, 'paper_fee_pct', 0.1)
 
-                fill_price = exit_price * (1 - (slippage / 100))
-                exit_fee = amount * fill_price * (fee_pct / 100)
-                gross_return = (amount * fill_price) - exit_fee
-                pnl_amount = gross_return - ((amount * entry_price) + entry_fee)
-                entry_total = (amount * entry_price) + entry_fee
-                pnl_pct = (pnl_amount / entry_total) * 100 if entry_total > 0 else 0.0
-                actual_exit_price = fill_price
-            else:
-                try:
-                    order = self._exchange.create_market_sell_order(pair, amount)
-                    actual_exit_price = float(order.get('average', order.get('price', exit_price)) or exit_price)
-                    logger.info(f"✅ تم تنفيذ أمر بيع حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_exit_price:.2f}$")
-                except Exception as e:
-                    logger.error(f"❌ فشل تنفيذ أمر البيع الحقيقي: {e}. سيتم التسجيل بالسعر المقدّر.")
-                    actual_exit_price = exit_price
+                    fill_price = exit_price * (1 - (slippage / 100))
+                    exit_fee = amount * fill_price * (fee_pct / 100)
+                    gross_return = (amount * fill_price) - exit_fee
+                    pnl_amount = gross_return - ((amount * entry_price) + entry_fee)
+                    entry_total = (amount * entry_price) + entry_fee
+                    pnl_pct = (pnl_amount / entry_total) * 100 if entry_total > 0 else 0.0
+                    actual_exit_price = fill_price
+                else:
+                    try:
+                        order = self._exchange.create_market_sell_order(pair, amount)
+                        actual_exit_price = float(order.get('average', order.get('price', exit_price)) or exit_price)
+                        logger.info(f"✅ تم تنفيذ أمر بيع حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_exit_price:.2f}$")
+                    except Exception as e:
+                        logger.error(f"❌ فشل تنفيذ أمر البيع الحقيقي: {e}. سيتم التسجيل بالسعر المقدّر.")
+                        actual_exit_price = exit_price
 
-                fee_rate = self.exchange_rules.taker_fee(pair)
-                exit_fee = amount * actual_exit_price * fee_rate
-                gross_return = (amount * actual_exit_price) - exit_fee
-                entry_total = (amount * entry_price) + entry_fee
-                pnl_amount = gross_return - entry_total
-                pnl_pct = ((actual_exit_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
+                    fee_rate = self.exchange_rules.taker_fee(pair)
+                    exit_fee = amount * actual_exit_price * fee_rate
+                    gross_return = (amount * actual_exit_price) - exit_fee
+                    entry_total = (amount * entry_price) + entry_fee
+                    pnl_amount = gross_return - entry_total
+                    pnl_pct = ((actual_exit_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
 
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            cursor.execute("""
-                UPDATE trades SET 
-                    status = 'CLOSED',
-                    exit_price = ?,
-                    exit_reason = ?,
-                    pnl_amount = ?,
-                    pnl_pct = ?,
-                    exit_time = ?,
-                    exit_fee = ?
-                WHERE id = ?
-            """, (actual_exit_price, reason, pnl_amount, pnl_pct, now, exit_fee, trade_id))
+                cursor.execute("""
+                    UPDATE trades SET
+                        status = 'CLOSED',
+                        exit_price = ?,
+                        exit_reason = ?,
+                        pnl_amount = ?,
+                        pnl_pct = ?,
+                        exit_time = ?,
+                        exit_fee = ?
+                    WHERE id = ?
+                """, (actual_exit_price, reason, pnl_amount, pnl_pct, now, exit_fee, trade_id))
 
-            # Update Portfolio
-            win_inc = 1 if pnl_amount >= 0 else 0
-            loss_inc = 1 if pnl_amount < 0 else 0
+                # Update Portfolio
+                win_inc = 1 if pnl_amount >= 0 else 0
+                loss_inc = 1 if pnl_amount < 0 else 0
 
-            cursor.execute("""
-                UPDATE portfolio SET
-                    usdt_balance = usdt_balance + ?,
-                    total_realized_pnl = total_realized_pnl + ?,
-                    win_trades = win_trades + ?,
-                    loss_trades = loss_trades + ?,
-                    updated_at = ?
-                WHERE id = 1
-            """, (gross_return, pnl_amount, win_inc, loss_inc, now))
-            conn.commit()
+                cursor.execute("""
+                    UPDATE portfolio SET
+                        usdt_balance = usdt_balance + ?,
+                        total_realized_pnl = total_realized_pnl + ?,
+                        win_trades = win_trades + ?,
+                        loss_trades = loss_trades + ?,
+                        updated_at = ?
+                    WHERE id = 1
+                """, (gross_return, pnl_amount, win_inc, loss_inc, now))
+                conn.commit()
 
-            pnl_icon = "💰" if pnl_amount >= 0 else "📉"
-            logger.info(
-                f"{pnl_icon} إغلاق صفقة #{trade_id} | {pair} | "
-                f"دخول: {entry_price:.2f}$ → خروج: {actual_exit_price:.2f}$ | "
-                f"PnL: {pnl_amount:+.4f}$ ({pnl_pct:+.2f}%) | السبب: {reason}"
-            )
-            try:
-                from notifier import TelegramNotifier
-                TelegramNotifier.notify_trade_closed(
-                    pair, entry_price, actual_exit_price, pnl_amount, pnl_pct, reason
+                pnl_icon = "💰" if pnl_amount >= 0 else "📉"
+                logger.info(
+                    f"{pnl_icon} إغلاق صفقة #{trade_id} | {pair} | "
+                    f"دخول: {entry_price:.2f}$ → خروج: {actual_exit_price:.2f}$ | "
+                    f"PnL: {pnl_amount:+.4f}$ ({pnl_pct:+.2f}%) | السبب: {reason}"
                 )
-            except Exception:
-                pass
+                try:
+                    from notifier import TelegramNotifier
+                    TelegramNotifier.notify_trade_closed(
+                        pair, entry_price, actual_exit_price, pnl_amount, pnl_pct, reason
+                    )
+                except Exception:
+                    pass
 
     def update_open_positions(self) -> List[str]:
         """
@@ -747,31 +903,33 @@ class TradingEngine:
                 continue
 
             # Update position in DB
-            with self._db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE trades SET 
-                        current_price = ?,
-                        highest_price = ?,
-                        trailing_stop_price = ?,
-                        pnl_amount = ?,
-                        pnl_pct = ?
-                    WHERE id = ?
-                """, (current_price, highest_price, trailing_stop, current_pnl_amt, current_pnl_pct, trade_id))
-                conn.commit()
+            with self._lock:
+                with self._db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE trades SET
+                            current_price = ?,
+                            highest_price = ?,
+                            trailing_stop_price = ?,
+                            pnl_amount = ?,
+                            pnl_pct = ?
+                        WHERE id = ?
+                    """, (current_price, highest_price, trailing_stop, current_pnl_amt, current_pnl_pct, trade_id))
+                    conn.commit()
 
         return events
 
     def log_ai_analysis(self, pair: str, analysis: AIAnalysisResult):
         """حفظ تحليل وتوصية الذكاء الاصطناعي في السجل"""
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with self._db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO ai_logs (timestamp, pair, signal, confidence, safety_score, sentiment, summary, details)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                now, pair, analysis.signal_arabic, analysis.confidence, analysis.safety_score,
-                analysis.market_sentiment, analysis.arabic_summary, analysis.detailed_advice
-            ))
-            conn.commit()
+        with self._lock:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO ai_logs (timestamp, pair, signal, confidence, safety_score, sentiment, summary, details)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    now, pair, analysis.signal_arabic, analysis.confidence, analysis.safety_score,
+                    analysis.market_sentiment, analysis.arabic_summary, analysis.detailed_advice
+                ))
+                conn.commit()
