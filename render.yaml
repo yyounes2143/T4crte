@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: t4crte-bot
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r t4crte/requirements.txt"
+    startCommand: "cd t4crte && python -m streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true"
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.2"
