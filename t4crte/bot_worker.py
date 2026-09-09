@@ -112,12 +112,13 @@ class AutonomousTradingWorker:
                                     f"🤖 إشارة شراء مؤكدة من الذكاء الاصطناعي لـ {pair} | "
                                     f"الثقة: {ai_res.confidence}% | الأمان: {ai_res.safety_score}%"
                                 )
-                                trade_id = self.engine.open_position(
+                                res = self.engine.open_position(
                                     pair=pair,
                                     current_price=ai_res.current_price,
                                     amount_usdt=current_cfg.trade_amount_usdt,
                                     is_paper=current_cfg.is_paper_trading
                                 )
+                                trade_id = res[0] if isinstance(res, tuple) else res
                                 if trade_id:
                                     logger.info(f"✅ تم تنفيذ الشراء التلقائي بنجاح! صفقة #{trade_id} على {pair}")
                                     break  # Open one trade per cycle to avoid race conditions

@@ -17,6 +17,8 @@ class TradingConfig:
     initial_balance: float = 4.0  # $4.00 starting capital
     trade_amount_usdt: float = 2.0  # Max per trade (e.g. $2.00 or $4.00)
     max_open_trades: int = 2  # Max simultaneous positions
+    paper_fee_pct: float = 0.1  # Paper simulation fee %
+    paper_slippage_pct: float = 0.05  # Paper simulation slippage %
     
     # Trading Pairs & Timeframe
     monitored_pairs: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
@@ -73,6 +75,8 @@ class TradingConfig:
             "initial_balance": self.initial_balance,
             "trade_amount_usdt": self.trade_amount_usdt,
             "max_open_trades": self.max_open_trades,
+            "paper_fee_pct": self.paper_fee_pct,
+            "paper_slippage_pct": self.paper_slippage_pct,
             "monitored_pairs": self.monitored_pairs,
             "timeframe": self.timeframe,
             "rsi_oversold": self.rsi_oversold,
