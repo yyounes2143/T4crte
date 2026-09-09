@@ -1019,16 +1019,27 @@ with tab_settings:
         sl_val = st.number_input("وقف الخسارة الأقصى % (Stop Loss):", min_value=0.5, max_value=10.0, value=float(config.stop_loss_pct), step=0.1)
         ts_act = st.number_input("نسبة تفعيل الوقف المتحرك %:", min_value=0.2, max_value=10.0, value=float(config.trailing_stop_activation_pct), step=0.1)
         ts_call = st.number_input("مسافة التراجع للوقف المتحرك %:", min_value=0.1, max_value=5.0, value=float(config.trailing_stop_callback_pct), step=0.1)
+        risk_per_trade = st.number_input("نسبة المخاطرة لكل صفقة % (Risk Per Trade):", min_value=0.1, max_value=10.0, value=float(getattr(config, 'risk_per_trade_pct', 1.0)), step=0.1)
+        daily_loss_limit = st.number_input("حد الخسارة اليومية الأقصى % (Daily Loss Limit):", min_value=0.5, max_value=20.0, value=float(getattr(config, 'daily_loss_limit_pct', 3.0)), step=0.5)
+        max_consec_losses = st.number_input("أقصى عدد خسائر متتالية (Max Consecutive Losses):", min_value=1, max_value=10, value=int(getattr(config, 'max_consecutive_losses', 3)))
+        cooldown_mins = st.number_input("فترة تهدئة الزوج بعد الخسارة (بالدقائق):", min_value=5, max_value=1440, value=int(getattr(config, 'pair_cooldown_minutes', 60)))
+        max_api_errs = st.number_input("أقصى عدد أخطاء API في الساعة:", min_value=1, max_value=100, value=int(getattr(config, 'max_api_errors_per_hour', 10)))
         check_sec = st.number_input("فترة تكرار الفحص في الخلفية (بالثواني):", min_value=5, max_value=120, value=int(config.worker_interval_seconds))
 
-    if st.button("💾 حفظ كافة إعدادات التداول", type="primary", use_container_width=True):
+    if st.button("💾 حفظ كافة إعدادات التداول والمخاطر", type="primary", use_container_width=True):
         config.trade_amount_usdt = trade_size
         config.max_open_trades = max_trades
+        config.max_open_positions = max_trades
         config.monitored_pairs = [p.strip() for p in pairs_input.split(",") if p.strip()]
         config.take_profit_pct = tp_val
         config.stop_loss_pct = sl_val
         config.trailing_stop_activation_pct = ts_act
         config.trailing_stop_callback_pct = ts_call
+        config.risk_per_trade_pct = risk_per_trade
+        config.daily_loss_limit_pct = daily_loss_limit
+        config.max_consecutive_losses = max_consec_losses
+        config.pair_cooldown_minutes = cooldown_mins
+        config.max_api_errors_per_hour = max_api_errs
         config.worker_interval_seconds = check_sec
         config.dashboard_password = dash_pwd.strip()
         if dash_pwd.strip():
@@ -1036,7 +1047,7 @@ with tab_settings:
         else:
             config.dashboard_password_hash = ""
         config.save_to_json()
-        st.success("✅ تم حفظ إعدادات التداول بنجاح!")
+        st.success("✅ تم حفظ إعدادات التداول والمخاطر بنجاح!")
         st.rerun()
 
     st.markdown("---")

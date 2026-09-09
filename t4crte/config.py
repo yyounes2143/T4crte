@@ -38,6 +38,14 @@ class TradingConfig:
     trailing_stop_activation_pct: float = 0.8  # Activate trailing stop when profit hits +0.8%
     trailing_stop_callback_pct: float = 0.4  # Lock profits if price pulls back 0.4% from peak
     
+    # Advanced Risk Management (RiskConfig)
+    risk_per_trade_pct: float = 1.0  # نسبة الرصيد المخاطر بها لكل صفقة %
+    max_open_positions: int = 2  # أقصى عدد صفقات مفتوحة
+    daily_loss_limit_pct: float = 3.0  # حد الخسارة اليومية %
+    max_consecutive_losses: int = 3  # أقصى عدد خسائر متتالية
+    pair_cooldown_minutes: int = 60  # فترة تهدئة الزوج بالدقائق
+    max_api_errors_per_hour: int = 10  # أقصى أخطاء API في الساعة
+
     # 2. Exchange API Keys
     api_key: str = ""
     api_secret: str = ""
@@ -91,6 +99,12 @@ class TradingConfig:
             "stop_loss_pct": self.stop_loss_pct,
             "trailing_stop_activation_pct": self.trailing_stop_activation_pct,
             "trailing_stop_callback_pct": self.trailing_stop_callback_pct,
+            "risk_per_trade_pct": self.risk_per_trade_pct,
+            "max_open_positions": self.max_open_positions,
+            "daily_loss_limit_pct": self.daily_loss_limit_pct,
+            "max_consecutive_losses": self.max_consecutive_losses,
+            "pair_cooldown_minutes": self.pair_cooldown_minutes,
+            "max_api_errors_per_hour": self.max_api_errors_per_hour,
             "api_key": self.api_key,
             "api_secret": self.api_secret,
             "api_passphrase": self.api_passphrase,
@@ -181,5 +195,17 @@ class TradingConfig:
             cfg.dashboard_password_hash = env_pwd_hash
 
         return cfg
+
+    def get_risk_config(self):
+        """Build RiskConfig instance from current settings"""
+        from risk_manager import RiskConfig
+        return RiskConfig(
+            risk_per_trade_pct=self.risk_per_trade_pct,
+            max_open_positions=self.max_open_positions,
+            daily_loss_limit_pct=self.daily_loss_limit_pct,
+            max_consecutive_losses=self.max_consecutive_losses,
+            pair_cooldown_minutes=self.pair_cooldown_minutes,
+            max_api_errors_per_hour=self.max_api_errors_per_hour,
+        )
 
 config = TradingConfig.load_from_json()

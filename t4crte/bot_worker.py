@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import datetime
+import ccxt
 from typing import Optional
 from config import config, TradingConfig
 from trading_engine import TradingEngine, _timeframe_to_seconds
@@ -176,6 +177,11 @@ class AutonomousTradingWorker:
                     cycle_duration_ms=cycle_duration_ms
                 )
 
+            except ccxt.BaseError as ccxt_err:
+                now_dt = datetime.datetime.now(datetime.timezone.utc)
+                self.engine.risk_manager.on_api_error(now_dt)
+                logger.error(f"خطأ في الـ API من CCXT: {ccxt_err}")
+                self.engine.set_worker_state(is_running=True, message=f"خطأ API: {str(ccxt_err)[:100]}")
             except Exception as e:
                 logger.error(f"خطأ غير متوقع في دورة المحرك الآلي: {e}")
                 self.engine.set_worker_state(is_running=True, message=f"تنبيه: {str(e)[:100]}")

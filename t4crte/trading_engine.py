@@ -14,6 +14,7 @@ from indicators import TechnicalIndicators
 from ai_advisor import AIAdvisor, AIAnalysisResult
 from logger import setup_logger
 from exchange_rules import ExchangeRules
+from risk_manager import RiskManager, RiskConfig, position_size_usdt
 
 logger = setup_logger("engine", log_file="trading.log")
 
@@ -78,7 +79,9 @@ class TradingEngine:
         self._last_spot_pairs_time: float = 0
         self._candle_cache: Dict[Tuple[str, str], Tuple[float, pd.DataFrame]] = {}
         self._price_cache: Dict[str, Tuple[float, float]] = {}
+        self._last_risk_log_times: Dict[Tuple[str, str], float] = {}
         self.init_db()
+        self.risk_manager = RiskManager(cfg=config.get_risk_config(), db_path=self.db_path)
         self._exchange = None
         self._init_exchange()
 
@@ -400,7 +403,10 @@ class TradingEngine:
                 """, (new_balance, new_balance, now))
                 cursor.execute("DELETE FROM trades WHERE is_paper = 1")
                 cursor.execute("DELETE FROM ai_logs")
+                cursor.execute("DELETE FROM risk_state")
                 conn.commit()
+            if hasattr(self, 'risk_manager') and self.risk_manager:
+                self.risk_manager.reset_all()
 
     @_retry_on_network_error(max_retries=3, base_delay=2.0)
     def fetch_market_candles(self, pair: str, timeframe: str = "15m", limit: int = 250) -> pd.DataFrame:
@@ -643,9 +649,32 @@ class TradingEngine:
                 conn.commit()
 
     def open_position(self, pair: str, current_price: float, amount_usdt: float, is_paper: bool = True) -> Tuple[Optional[int], str]:
-        """فتح صفقة شراء جديدة مع ضبط الوقف وأخذ الربح ومحاكاة الرسوم والانزلاق"""
+        """فتح صفقة شراء جديدة مع ضبط الوقف وأخذ الربح ومحاكاة الرسوم والانزلاق وتقييد المخاطر"""
         if current_price <= 0:
             return None, "سعر غير صالح"
+
+        # Check Risk Manager rules
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        open_trades = self.get_open_trades()
+        p_state = self.get_portfolio_state()
+        state = {
+            "open_positions_count": len(open_trades),
+            "max_open_positions": min(config.max_open_trades, config.get_risk_config().max_open_positions),
+            "today_realized_pnl_pct": self.risk_manager.today_realized_pnl_pct,
+            "consecutive_losses": self.risk_manager.consecutive_losses,
+            "last_loss_time_by_pair": self.risk_manager.last_loss_time_by_pair,
+            "api_errors_last_hour": self.risk_manager.api_errors_last_hour,
+            "kill_switch": self.risk_manager.kill_switch,
+        }
+
+        can_open, reason = self.risk_manager.can_open(pair, now_dt, state)
+        if not can_open:
+            now_ts = time.time()
+            log_key = (pair, reason)
+            if log_key not in self._last_risk_log_times or (now_ts - self._last_risk_log_times[log_key]) >= 300:
+                logger.warning(f"🛡️ رفض مدير المخاطر فتح صفقة لـ {pair}: {reason}")
+                self._last_risk_log_times[log_key] = now_ts
+            return None, reason
 
         with self._lock:
             with self._db_connection() as conn:
@@ -658,11 +687,26 @@ class TradingEngine:
                     logger.warning(msg)
                     return None, msg
 
+                # Dynamic Position Size check
+                calc_stop = current_price * (1 - (config.stop_loss_pct / 100.0))
+                notional_calc, size_msg = position_size_usdt(
+                    equity=p_state["total_equity"],
+                    entry=current_price,
+                    stop=calc_stop,
+                    cfg=config.get_risk_config(),
+                    rules=self.exchange_rules,
+                    symbol=pair
+                )
+
+                # Use calculated position size if amount_usdt is 0 or if notional_calc is smaller
+                trade_usdt = min(amount_usdt, notional_calc) if amount_usdt > 0 and notional_calc > 0 else amount_usdt
+
                 # Check open positions limit
                 cursor.execute("SELECT COUNT(*) FROM trades WHERE status = 'OPEN'")
                 open_count = cursor.fetchone()[0]
-                if open_count >= config.max_open_trades:
-                    msg = f"تم بلوغ الحد الأقصى للصفقات المفتوحة ({config.max_open_trades}). لن يتم فتح صفقة جديدة."
+                max_pos = min(config.max_open_trades, config.get_risk_config().max_open_positions)
+                if open_count >= max_pos:
+                    msg = f"تم بلوغ الحد الأقصى للصفقات المفتوحة ({max_pos}). لن يتم فتح صفقة جديدة."
                     logger.info(msg)
                     return None, msg
 
@@ -673,7 +717,7 @@ class TradingEngine:
                     fee_pct = getattr(config, 'paper_fee_pct', 0.1)
 
                     fill_price = current_price * (1 + (slippage / 100))
-                    raw_amount = amount_usdt / fill_price
+                    raw_amount = trade_usdt / fill_price
                     amount = self.exchange_rules.round_amount(pair, raw_amount)
 
                     is_valid, val_msg = self.exchange_rules.validate_order(pair, amount, fill_price)
@@ -696,7 +740,7 @@ class TradingEngine:
                     entry_fee = fee_usdt
 
                 else:
-                    raw_amount = amount_usdt / current_price
+                    raw_amount = trade_usdt / current_price
                     is_valid, val_msg = self.exchange_rules.validate_order(pair, raw_amount, current_price)
                     if not is_valid:
                         logger.warning(f"رفض أمر التداول الحقيقي لـ {pair}: {val_msg}")
@@ -712,6 +756,11 @@ class TradingEngine:
                         entry_fee = actual_cost * fee_rate
                         total_deduction = actual_cost + entry_fee
                         logger.info(f"✅ تم تنفيذ أمر شراء حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_price:.2f}$")
+                    except ccxt.BaseError as e:
+                        self.risk_manager.on_api_error(datetime.datetime.now(datetime.timezone.utc))
+                        msg = f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}"
+                        logger.error(msg)
+                        return None, msg
                     except Exception as e:
                         msg = f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}"
                         logger.error(msg)
@@ -821,6 +870,10 @@ class TradingEngine:
                     WHERE id = 1
                 """, (gross_return, pnl_amount, win_inc, loss_inc, now))
                 conn.commit()
+
+                # Notify RiskManager of trade closure
+                now_dt = datetime.datetime.now(datetime.timezone.utc)
+                self.risk_manager.on_trade_closed(pair, pnl_amount, now_dt, pnl_pct)
 
                 pnl_icon = "💰" if pnl_amount >= 0 else "📉"
                 logger.info(
