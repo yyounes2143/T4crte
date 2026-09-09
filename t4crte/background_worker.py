@@ -8,7 +8,8 @@ import signal
 import sys
 import os
 import threading
-from datetime import datetime, timedelta
+import ccxt
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 # إضافة مسار المشروع
@@ -121,6 +122,13 @@ class BackgroundWorker:
                 logger.info("تم إيقاف المحرك يدوياً (Ctrl+C)")
                 break
 
+            except ccxt.BaseError as ccxt_err:
+                self._consecutive_errors += 1
+                if self._engine and hasattr(self._engine, 'risk_manager'):
+                    self._engine.risk_manager.on_api_error(datetime.now(timezone.utc))
+                logger.error(
+                    f"❌ خطأ API في CCXT (المحاولة {self._consecutive_errors}/{MAX_RETRIES_ON_ERROR}): {ccxt_err}"
+                )
             except Exception as e:
                 self._consecutive_errors += 1
                 logger.error(
