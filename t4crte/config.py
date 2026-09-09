@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -57,10 +58,12 @@ class TradingConfig:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     dashboard_password: str = ""
+    dashboard_password_hash: str = ""
     
     # Database & Config Paths
     db_path: str = os.path.join(os.path.dirname(__file__), "trading_data.db")
     config_file: str = os.path.join(os.path.dirname(__file__), "config.json")
+    example_config_file: str = os.path.join(os.path.dirname(__file__), "config.example.json")
 
     def save_to_json(self):
         """Save settings to config.json"""
@@ -98,36 +101,70 @@ class TradingConfig:
             "telegram_bot_token": self.telegram_bot_token,
             "telegram_chat_id": self.telegram_chat_id,
             "dashboard_password": self.dashboard_password,
+            "dashboard_password_hash": self.dashboard_password_hash,
         }
+
+        # Do not save sensitive values if they come from environment variables
+        if os.environ.get("T4_API_KEY") or os.environ.get("TRADING_API_KEY"):
+            data["api_key"] = ""
+        if os.environ.get("T4_API_SECRET") or os.environ.get("TRADING_API_SECRET"):
+            data["api_secret"] = ""
+        if os.environ.get("T4_API_PASSPHRASE") or os.environ.get("TRADING_API_PASSPHRASE"):
+            data["api_passphrase"] = ""
+        if os.environ.get("T4_AI_API_KEY") or os.environ.get("AI_API_KEY"):
+            data["ai_api_key"] = ""
+        if os.environ.get("T4_TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN"):
+            data["telegram_bot_token"] = ""
+        if os.environ.get("T4_TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID"):
+            data["telegram_chat_id"] = ""
+        if os.environ.get("T4_DASHBOARD_PASSWORD") or os.environ.get("DASHBOARD_PASSWORD"):
+            data["dashboard_password"] = ""
+        if os.environ.get("T4_DASHBOARD_PASSWORD_HASH") or os.environ.get("DASHBOARD_PASSWORD_HASH"):
+            data["dashboard_password_hash"] = ""
+
         with open(self.config_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
 
     @classmethod
     def load_from_json(cls) -> "TradingConfig":
-        """Load settings from config.json if exists, otherwise defaults"""
+        """Load settings from config.json if exists, otherwise config.example.json or defaults"""
+        load_dotenv()
         cfg = cls()
-        if os.path.exists(cfg.config_file):
+
+        target_file = cfg.config_file
+        if not os.path.exists(target_file):
+            if os.path.exists(cfg.example_config_file):
+                try:
+                    shutil.copyfile(cfg.example_config_file, target_file)
+                except Exception:
+                    target_file = cfg.example_config_file
+
+        if os.path.exists(target_file):
             try:
-                with open(cfg.config_file, "r", encoding="utf-8") as f:
+                with open(target_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     for k, v in data.items():
                         if hasattr(cfg, k):
                             setattr(cfg, k, v)
             except Exception:
                 pass
-        
-        # تحميل المفاتيح الحساسة من متغيرات البيئة (.env) إذا كانت موجودة
-        env_api_key = os.environ.get('TRADING_API_KEY', '').strip()
-        env_api_secret = os.environ.get('TRADING_API_SECRET', '').strip()
-        env_ai_api_key = os.environ.get('AI_API_KEY', '').strip()
-        env_tg_token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
-        env_tg_chat = os.environ.get('TELEGRAM_CHAT_ID', '').strip()
-        env_pwd = os.environ.get('DASHBOARD_PASSWORD', '').strip()
+
+        # Load sensitive keys from environment variables (.env / os.environ) if available
+        env_api_key = (os.environ.get('T4_API_KEY') or os.environ.get('TRADING_API_KEY', '')).strip()
+        env_api_secret = (os.environ.get('T4_API_SECRET') or os.environ.get('TRADING_API_SECRET', '')).strip()
+        env_api_pass = (os.environ.get('T4_API_PASSPHRASE') or os.environ.get('TRADING_API_PASSPHRASE', '')).strip()
+        env_ai_api_key = (os.environ.get('T4_AI_API_KEY') or os.environ.get('AI_API_KEY', '')).strip()
+        env_tg_token = (os.environ.get('T4_TELEGRAM_TOKEN') or os.environ.get('TELEGRAM_BOT_TOKEN', '')).strip()
+        env_tg_chat = (os.environ.get('T4_TELEGRAM_CHAT_ID') or os.environ.get('TELEGRAM_CHAT_ID', '')).strip()
+        env_pwd = (os.environ.get('T4_DASHBOARD_PASSWORD') or os.environ.get('DASHBOARD_PASSWORD', '')).strip()
+        env_pwd_hash = (os.environ.get('T4_DASHBOARD_PASSWORD_HASH') or os.environ.get('DASHBOARD_PASSWORD_HASH', '')).strip()
 
         if env_api_key:
             cfg.api_key = env_api_key
         if env_api_secret:
             cfg.api_secret = env_api_secret
+        if env_api_pass:
+            cfg.api_passphrase = env_api_pass
         if env_ai_api_key:
             cfg.ai_api_key = env_ai_api_key
         if env_tg_token:
@@ -136,7 +173,9 @@ class TradingConfig:
             cfg.telegram_chat_id = env_tg_chat
         if env_pwd:
             cfg.dashboard_password = env_pwd
-            
+        if env_pwd_hash:
+            cfg.dashboard_password_hash = env_pwd_hash
+
         return cfg
 
 config = TradingConfig.load_from_json()

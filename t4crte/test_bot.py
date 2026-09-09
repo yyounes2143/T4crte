@@ -11,6 +11,8 @@ import unittest
 import gc
 from unittest.mock import patch, MagicMock
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # Configure stdout for UTF-8 on Windows
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -361,10 +363,11 @@ class TestUniversalFeatures(unittest.TestCase):
         from bot_worker import AutonomousTradingWorker
         worker = AutonomousTradingWorker.get_instance()
         self.assertFalse(worker.is_running())
-        worker.start()
-        self.assertTrue(worker.is_running())
-        worker.stop()
-        self.assertFalse(worker.is_running())
+        with patch.object(worker.engine, 'fetch_market_candles', return_value=pd.DataFrame()):
+            worker.start()
+            self.assertTrue(worker.is_running())
+            worker.stop()
+            self.assertFalse(worker.is_running())
 
     def test_telegram_notifier_empty_credentials(self):
         """التحقق من معالجة بيانات تيليجرام الفارغة بأمان"""

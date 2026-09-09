@@ -1,0 +1,8 @@
+config.json
+.env
+*.db
+*.log
+worker_status.json
+.venv/
+__pycache__/
+*.pyc
