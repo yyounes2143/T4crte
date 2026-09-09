@@ -12,6 +12,7 @@ from config import config
 from indicators import TechnicalIndicators
 from ai_advisor import AIAdvisor, AIAnalysisResult
 from logger import setup_logger
+from exchange_rules import ExchangeRules
 
 logger = setup_logger("engine", log_file="trading.log")
 
@@ -94,6 +95,7 @@ class TradingEngine:
         except Exception as e:
             logger.error(f"خطأ في تهيئة المنصة ({config.exchange_id}): {e}. الرجوع إلى Bybit الافتراضية.")
             self._exchange = ccxt.bybit({'enableRateLimit': True})
+        self.exchange_rules = ExchangeRules(self._exchange)
 
     def init_db(self):
         """إنشاء جداول قاعدة البيانات إذا لم تكن موجودة"""
@@ -122,9 +124,22 @@ class TradingEngine:
                     pnl_pct REAL DEFAULT 0.0,
                     entry_time TEXT NOT NULL,
                     exit_time TEXT,
-                    is_paper INTEGER DEFAULT 1
+                    is_paper INTEGER DEFAULT 1,
+                    entry_fee REAL DEFAULT 0.0,
+                    exit_fee REAL DEFAULT 0.0
                 )
             """)
+
+            # أضف أعمدة DB الجديدة (entry_fee, exit_fee) بطريقة آمنة
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0.0")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN exit_fee REAL DEFAULT 0.0")
+            except sqlite3.OperationalError:
+                pass
 
             # جدول المحفظة والرصيد
             cursor.execute("""
@@ -213,10 +228,10 @@ class TradingEngine:
                 usdt_balance, initial_balance, realized_pnl, wins, losses = config.initial_balance, config.initial_balance, 0.0, 0, 0
 
             # حساب الأرباح العائمة للصفقات المفتوحة
-            cursor.execute("SELECT cost, pnl_amount FROM trades WHERE status = 'OPEN'")
+            cursor.execute("SELECT cost, pnl_amount, COALESCE(entry_fee, 0.0) FROM trades WHERE status = 'OPEN'")
             open_rows = cursor.fetchall()
             unrealized_pnl = sum([r[1] for r in open_rows])
-            total_invested = sum([r[0] for r in open_rows])
+            total_invested = sum([r[0] + r[2] for r in open_rows])
 
             total_equity = usdt_balance + total_invested + unrealized_pnl
             total_pnl = realized_pnl + unrealized_pnl
@@ -473,10 +488,10 @@ class TradingEngine:
                 """, (1 if is_running else 0, now, message))
             conn.commit()
 
-    def open_position(self, pair: str, current_price: float, amount_usdt: float, is_paper: bool = True) -> Optional[int]:
-        """فتح صفقة شراء جديدة مع ضبط الوقف وأخذ الربح"""
+    def open_position(self, pair: str, current_price: float, amount_usdt: float, is_paper: bool = True) -> Tuple[Optional[int], str]:
+        """فتح صفقة شراء جديدة مع ضبط الوقف وأخذ الربح ومحاكاة الرسوم والانزلاق"""
         if current_price <= 0:
-            return None
+            return None, "سعر غير صالح"
 
         with self._db_connection() as conn:
             cursor = conn.cursor()
@@ -484,54 +499,69 @@ class TradingEngine:
             balance = cursor.fetchone()[0]
 
             if balance < amount_usdt:
-                logger.warning(f"رصيد غير كافٍ لفتح صفقة {pair}: المتاح {balance:.2f}$ < المطلوب {amount_usdt:.2f}$")
-                return None
+                msg = f"رصيد غير كافٍ لفتح صفقة {pair}: المتاح {balance:.2f}$ < المطلوب {amount_usdt:.2f}$"
+                logger.warning(msg)
+                return None, msg
 
             # Check open positions limit
             cursor.execute("SELECT COUNT(*) FROM trades WHERE status = 'OPEN'")
             open_count = cursor.fetchone()[0]
             if open_count >= config.max_open_trades:
-                logger.info(f"تم بلوغ الحد الأقصى للصفقات المفتوحة ({config.max_open_trades}). لن يتم فتح صفقة جديدة.")
-                return None
-
-            # Calculate quantities and targets
-            qty = amount_usdt / current_price
-            take_profit = current_price * (1 + (config.take_profit_pct / 100))
-            stop_loss = current_price * (1 - (config.stop_loss_pct / 100))
-            trailing_stop = stop_loss  # initially matches stop loss
+                msg = f"تم بلوغ الحد الأقصى للصفقات المفتوحة ({config.max_open_trades}). لن يتم فتح صفقة جديدة."
+                logger.info(msg)
+                return None, msg
 
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # تنفيذ الأمر الحقيقي على المنصة إذا لم يكن تداولاً ورقياً
-            actual_price = current_price
-            actual_qty = qty
-            if not is_paper:
-                try:
-                    # التحقق من الحد الأدنى لحجم الصفقة في المنصة
-                    if self._exchange and hasattr(self._exchange, 'markets'):
-                        if not self._exchange.markets:
-                            self._exchange.load_markets()
-                        if pair in self._exchange.markets:
-                            market = self._exchange.markets[pair]
-                            min_cost = market.get('limits', {}).get('cost', {}).get('min', 0) or 0
-                            min_amount = market.get('limits', {}).get('amount', {}).get('min', 0) or 0
-                            if amount_usdt < min_cost:
-                                logger.warning(f"قيمة الصفقة {amount_usdt:.2f}$ أقل من الحد الأدنى للمنصة {min_cost}$")
-                                return None
-                            if qty < min_amount:
-                                logger.warning(f"كمية الصفقة {qty:.8f} أقل من الحد الأدنى للمنصة {min_amount}")
-                                return None
+            if is_paper:
+                slippage = getattr(config, 'paper_slippage_pct', 0.05)
+                fee_pct = getattr(config, 'paper_fee_pct', 0.1)
 
+                fill_price = current_price * (1 + (slippage / 100))
+                raw_amount = amount_usdt / fill_price
+                amount = self.exchange_rules.round_amount(pair, raw_amount)
+
+                is_valid, val_msg = self.exchange_rules.validate_order(pair, amount, fill_price)
+                if not is_valid:
+                    logger.warning(f"رفض أمر التداول التجريبي لـ {pair}: {val_msg}")
+                    return None, val_msg
+
+                cost = amount * fill_price
+                fee_usdt = cost * (fee_pct / 100)
+                total_deduction = cost + fee_usdt
+
+                if balance < total_deduction:
+                    msg = f"الرصيد المتاح ({balance:.2f}$) غير كافٍ لتغطية التكلفة والرسوم ({total_deduction:.2f}$)"
+                    logger.warning(msg)
+                    return None, msg
+
+                actual_price = fill_price
+                actual_qty = amount
+                actual_cost = cost
+                entry_fee = fee_usdt
+
+            else:
+                raw_amount = amount_usdt / current_price
+                is_valid, val_msg = self.exchange_rules.validate_order(pair, raw_amount, current_price)
+                if not is_valid:
+                    logger.warning(f"رفض أمر التداول الحقيقي لـ {pair}: {val_msg}")
+                    return None, val_msg
+
+                try:
+                    qty = self.exchange_rules.round_amount(pair, raw_amount)
                     order = self._exchange.create_market_buy_order(pair, qty)
                     actual_price = float(order.get('average', order.get('price', current_price)) or current_price)
                     actual_qty = float(order.get('filled', qty) or qty)
+                    actual_cost = actual_qty * actual_price
+                    fee_rate = self.exchange_rules.taker_fee(pair)
+                    entry_fee = actual_cost * fee_rate
+                    total_deduction = actual_cost + entry_fee
                     logger.info(f"✅ تم تنفيذ أمر شراء حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_price:.2f}$")
                 except Exception as e:
-                    logger.error(f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}")
-                    return None
+                    msg = f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}"
+                    logger.error(msg)
+                    return None, msg
 
-            # إعادة حساب القيم بناءً على السعر والكمية الفعلية
-            actual_cost = actual_qty * actual_price
             take_profit = actual_price * (1 + (config.take_profit_pct / 100))
             stop_loss = actual_price * (1 - (config.stop_loss_pct / 100))
             trailing_stop = stop_loss
@@ -540,22 +570,23 @@ class TradingEngine:
                 INSERT INTO trades (
                     pair, side, entry_price, current_price, amount, cost, highest_price,
                     trailing_stop_price, take_profit_price, stop_loss_price, status,
-                    entry_time, is_paper
-                ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
+                    entry_time, is_paper, entry_fee
+                ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
             """, (
                 pair, actual_price, actual_price, actual_qty, actual_cost, actual_price,
-                trailing_stop, take_profit, stop_loss, now, 1 if is_paper else 0
+                trailing_stop, take_profit, stop_loss, now, 1 if is_paper else 0, entry_fee
             ))
             trade_id = cursor.lastrowid
 
-            # Deduct USDT balance
-            cursor.execute("UPDATE portfolio SET usdt_balance = usdt_balance - ? WHERE id = 1", (actual_cost,))
+            # Deduct total cost + fee from portfolio balance
+            cursor.execute("UPDATE portfolio SET usdt_balance = usdt_balance - ? WHERE id = 1", (total_deduction,))
             conn.commit()
+
             trade_mode = "ورقية" if is_paper else "حقيقية"
             logger.info(
                 f"📈 فتح صفقة {trade_mode} #{trade_id} | {pair} | "
-                f"سعر الدخول: {actual_price:.2f}$ | الكمية: {actual_qty:.6f} | "
-                f"التكلفة: {actual_cost:.2f}$ | الهدف: {take_profit:.2f}$ | الوقف: {stop_loss:.2f}$"
+                f"سعر الدخول: {actual_price:.4f}$ | الكمية: {actual_qty} | "
+                f"التكلفة: {actual_cost:.2f}$ | الرسوم: {entry_fee:.4f}$ | الهدف: {take_profit:.2f}$ | الوقف: {stop_loss:.2f}$"
             )
             try:
                 from notifier import TelegramNotifier
@@ -564,38 +595,47 @@ class TradingEngine:
                 )
             except Exception:
                 pass
-            return trade_id
+            return trade_id, "تم فتح الصفقة بنجاح"
 
     def close_position(self, trade_id: int, exit_price: float, reason: str):
-        """إغلاق صفقة معينة واحتساب الأرباح المحققة وتحديث الرصيد"""
+        """إغلاق صفقة معينة واحتساب الأرباح المحققة وتحديث الرصيد محاكاة الرسوم والانزلاق"""
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT cost, amount, entry_price, pair FROM trades WHERE id = ? AND status = 'OPEN'", (trade_id,))
+            cursor.execute("SELECT cost, amount, entry_price, pair, COALESCE(entry_fee, 0.0), is_paper FROM trades WHERE id = ? AND status = 'OPEN'", (trade_id,))
             row = cursor.fetchone()
             if not row:
                 logger.warning(f"محاولة إغلاق صفقة غير موجودة أو مغلقة مسبقاً: #{trade_id}")
                 return
 
-            cost, amount, entry_price, pair = row
+            cost, amount, entry_price, pair, entry_fee, is_paper_val = row
+            is_paper_trade = bool(is_paper_val)
 
-            # تنفيذ أمر البيع الحقيقي على المنصة
-            cursor.execute("SELECT is_paper FROM trades WHERE id = ?", (trade_id,))
-            is_paper_row = cursor.fetchone()
-            is_paper_trade = bool(is_paper_row[0]) if is_paper_row else True
+            if is_paper_trade:
+                slippage = getattr(config, 'paper_slippage_pct', 0.05)
+                fee_pct = getattr(config, 'paper_fee_pct', 0.1)
 
-            actual_exit_price = exit_price
-            if not is_paper_trade:
+                fill_price = exit_price * (1 - (slippage / 100))
+                exit_fee = amount * fill_price * (fee_pct / 100)
+                gross_return = (amount * fill_price) - exit_fee
+                pnl_amount = gross_return - ((amount * entry_price) + entry_fee)
+                entry_total = (amount * entry_price) + entry_fee
+                pnl_pct = (pnl_amount / entry_total) * 100 if entry_total > 0 else 0.0
+                actual_exit_price = fill_price
+            else:
                 try:
                     order = self._exchange.create_market_sell_order(pair, amount)
                     actual_exit_price = float(order.get('average', order.get('price', exit_price)) or exit_price)
                     logger.info(f"✅ تم تنفيذ أمر بيع حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_exit_price:.2f}$")
                 except Exception as e:
                     logger.error(f"❌ فشل تنفيذ أمر البيع الحقيقي: {e}. سيتم التسجيل بالسعر المقدّر.")
+                    actual_exit_price = exit_price
 
-            exit_price = actual_exit_price
-            gross_return = amount * exit_price
-            pnl_amount = gross_return - cost
-            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                fee_rate = self.exchange_rules.taker_fee(pair)
+                exit_fee = amount * actual_exit_price * fee_rate
+                gross_return = (amount * actual_exit_price) - exit_fee
+                entry_total = (amount * entry_price) + entry_fee
+                pnl_amount = gross_return - entry_total
+                pnl_pct = ((actual_exit_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
 
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -606,9 +646,10 @@ class TradingEngine:
                     exit_reason = ?,
                     pnl_amount = ?,
                     pnl_pct = ?,
-                    exit_time = ?
+                    exit_time = ?,
+                    exit_fee = ?
                 WHERE id = ?
-            """, (exit_price, reason, pnl_amount, pnl_pct, now, trade_id))
+            """, (actual_exit_price, reason, pnl_amount, pnl_pct, now, exit_fee, trade_id))
 
             # Update Portfolio
             win_inc = 1 if pnl_amount >= 0 else 0
@@ -628,13 +669,13 @@ class TradingEngine:
             pnl_icon = "💰" if pnl_amount >= 0 else "📉"
             logger.info(
                 f"{pnl_icon} إغلاق صفقة #{trade_id} | {pair} | "
-                f"دخول: {entry_price:.2f}$ → خروج: {exit_price:.2f}$ | "
+                f"دخول: {entry_price:.2f}$ → خروج: {actual_exit_price:.2f}$ | "
                 f"PnL: {pnl_amount:+.4f}$ ({pnl_pct:+.2f}%) | السبب: {reason}"
             )
             try:
                 from notifier import TelegramNotifier
                 TelegramNotifier.notify_trade_closed(
-                    pair, entry_price, exit_price, pnl_amount, pnl_pct, reason
+                    pair, entry_price, actual_exit_price, pnl_amount, pnl_pct, reason
                 )
             except Exception:
                 pass
@@ -666,8 +707,16 @@ class TradingEngine:
             if current_price <= 0:
                 continue
 
-            current_pnl_pct = ((current_price - entry_price) / entry_price) * 100
-            current_pnl_amt = (amount * current_price) - cost
+            slippage = getattr(config, 'paper_slippage_pct', 0.05)
+            fee_pct = getattr(config, 'paper_fee_pct', 0.1)
+            entry_fee = trade.get('entry_fee', 0.0) or 0.0
+
+            est_exit_price = current_price * (1 - (slippage / 100))
+            est_exit_fee = amount * est_exit_price * (fee_pct / 100)
+            entry_total = (amount * entry_price) + entry_fee
+
+            current_pnl_amt = (amount * est_exit_price - est_exit_fee) - entry_total
+            current_pnl_pct = ((est_exit_price - entry_price) / entry_price) * 100
 
             # Update highest price seen
             if current_price > highest_price:

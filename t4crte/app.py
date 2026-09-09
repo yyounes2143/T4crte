@@ -473,10 +473,14 @@ with tab_live:
                         if live_portfolio['usdt_balance'] < config.trade_amount_usdt:
                             st.error("الرصيد المتاح غير كافٍ لفتح الصفقة!")
                         else:
-                            tid = engine.open_position(curr_active_pair, ai_res.current_price, config.trade_amount_usdt, is_paper=config.is_paper_trading)
+                            res = engine.open_position(curr_active_pair, ai_res.current_price, config.trade_amount_usdt, is_paper=config.is_paper_trading)
+                            tid = res[0] if isinstance(res, tuple) else res
+                            msg = res[1] if isinstance(res, tuple) and len(res) > 1 else ""
                             if tid:
                                 st.success(f"تم فتح الصفقة بنجاح على {curr_active_pair}!")
                                 st.rerun()
+                            else:
+                                st.error(msg or "تم رفض فتح الصفقة")
 
         # Chart Section
         if not candles_df.empty:
