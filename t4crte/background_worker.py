@@ -195,54 +195,76 @@ class BackgroundWorker:
             for event in events:
                 logger.info(f"📢 حدث تداول: {event}")
 
-        # 2. التداول الآلي: فحص الأزواج وفتح صفقات جديدة إذا كان مفعلاً
+        # 2. التداول الآلي: فحص الأزواج باستخدام استراتيجية نظام السوق وقواعد ATR
         if current_cfg.auto_trading_enabled:
             try:
-                from universal_ai import UniversalAIClient
+                from strategy import generate_signal
+                from risk_manager import position_size_usdt
+                import pandas as pd
+
                 state = self._engine.get_portfolio_state()
                 open_trades = self._engine.get_open_trades()
                 open_pairs = [t['pair'] for t in open_trades]
 
-                if len(open_trades) < current_cfg.max_open_trades and state['usdt_balance'] >= current_cfg.trade_amount_usdt:
-                    for pair in current_cfg.monitored_pairs:
-                        if not self._running:
-                            break
-                        if pair in open_pairs:
-                            continue
+                htf_tf = getattr(current_cfg, 'htf_timeframe', '1h')
+                fee_pct = getattr(current_cfg, 'paper_fee_pct', 0.1) if current_cfg.is_paper_trading else 0.1
+                slippage_pct = getattr(current_cfg, 'paper_slippage_pct', 0.05) if current_cfg.is_paper_trading else 0.05
 
-                        candles = self._engine.fetch_market_candles(pair, timeframe=current_cfg.timeframe, limit=250)
-                        if candles.empty:
-                            continue
-                        candles = drop_forming_candle(candles, current_cfg.timeframe)
+                for pair in current_cfg.monitored_pairs:
+                    if not self._running:
+                        break
 
-                        ai_res = UniversalAIClient.analyze_market_with_llm(
-                            candles_df=candles,
-                            pair=pair,
-                            base_url=current_cfg.ai_base_url,
-                            api_key=current_cfg.ai_api_key,
-                            model_name=current_cfg.ai_model,
-                            take_profit_pct=current_cfg.take_profit_pct,
-                            stop_loss_pct=current_cfg.stop_loss_pct
-                        )
+                    # Fetch market data (LTF and HTF)
+                    df_ltf = self._engine.fetch_market_candles(pair, timeframe=current_cfg.timeframe, limit=250)
+                    if df_ltf.empty:
+                        continue
+                    df_ltf = drop_forming_candle(df_ltf, current_cfg.timeframe)
 
-                        self._engine.log_ai_analysis(pair, ai_res)
+                    df_htf = self._engine.fetch_market_candles(pair, timeframe=htf_tf, limit=250)
+                    if not df_htf.empty:
+                        df_htf = drop_forming_candle(df_htf, htf_tf)
 
-                        if ai_res.signal == "BUY" and ai_res.confidence >= 65 and ai_res.safety_score >= 80:
-                            logger.info(
-                                f"🤖 إشارة شراء مؤكدة لـ {pair} | "
-                                f"الثقة: {ai_res.confidence}% | الأمان: {ai_res.safety_score}%"
+                    sig = generate_signal(df_ltf, df_htf, fee_pct=fee_pct, slippage_pct=slippage_pct, cfg=current_cfg)
+                    logger.info(
+                        f"📊 الزوج: {pair} | Regime: {sig.regime} | Action: {sig.action} | "
+                        f"Entry: {sig.entry:.4f} | Stop: {sig.stop:.4f} | TP: {sig.take_profit:.4f} | "
+                        f"R:R: {sig.rr} | Reasons: {', '.join(sig.reasons)}"
+                    )
+
+                    if pair in open_pairs:
+                        continue
+
+                    if len(open_trades) < current_cfg.max_open_trades and state['usdt_balance'] >= current_cfg.trade_amount_usdt:
+                        if sig.action == "BUY":
+                            last_row = df_ltf.iloc[-1]
+                            atr_val = float(last_row['atr']) if 'atr' in last_row and not pd.isna(last_row['atr']) else (float(last_row['high']) - float(last_row['low']))
+
+                            pos_usdt, size_msg = position_size_usdt(
+                                equity=state['total_equity'],
+                                entry=sig.entry,
+                                stop=sig.stop,
+                                cfg=current_cfg.get_risk_config(),
+                                rules=self._engine.exchange_rules,
+                                symbol=pair
                             )
+                            amount_to_use = min(current_cfg.trade_amount_usdt, pos_usdt) if pos_usdt > 0 else current_cfg.trade_amount_usdt
+
                             res = self._engine.open_position(
                                 pair=pair,
-                                current_price=ai_res.current_price,
-                                amount_usdt=current_cfg.trade_amount_usdt,
-                                is_paper=current_cfg.is_paper_trading
+                                current_price=sig.entry,
+                                amount_usdt=amount_to_use,
+                                is_paper=current_cfg.is_paper_trading,
+                                stop_loss=sig.stop,
+                                take_profit=sig.take_profit,
+                                atr_at_entry=atr_val
                             )
                             trade_id = res[0] if isinstance(res, tuple) else res
                             if trade_id:
-                                logger.info(f"✅ تم تنفيذ الشراء التلقائي! صفقة #{trade_id} على {pair}")
+                                logger.info(f"✅ تم تنفيذ الشراء التلقائي بنجاح! صفقة #{trade_id} على {pair} [Regime: {sig.regime}]")
                                 self._total_events += 1
-                                break
+                                open_trades = self._engine.get_open_trades()
+                                open_pairs = [t['pair'] for t in open_trades]
+                                break  # Open one trade per cycle to avoid race conditions
             except Exception as e:
                 logger.error(f"خطأ في التداول الآلي: {e}")
 

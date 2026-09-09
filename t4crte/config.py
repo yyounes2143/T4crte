@@ -23,6 +23,7 @@ class TradingConfig:
     # Trading Pairs & Timeframe
     monitored_pairs: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
     timeframe: str = "15m"
+    htf_timeframe: str = "1h"
     
     # Strategy & Risk Management
     rsi_oversold: float = 35.0
@@ -37,6 +38,11 @@ class TradingConfig:
     stop_loss_pct: float = 1.2  # Max initial loss allowed -1.2%
     trailing_stop_activation_pct: float = 0.8  # Activate trailing stop when profit hits +0.8%
     trailing_stop_callback_pct: float = 0.4  # Lock profits if price pulls back 0.4% from peak
+    atr_stop_mult: float = 0.5
+    atr_tp_mult: float = 2.5
+    min_rr: float = 1.5
+    trail_activation_atr: float = 1.0
+    trail_distance_atr: float = 1.0
     
     # Advanced Risk Management (RiskConfig)
     risk_per_trade_pct: float = 1.0  # نسبة الرصيد المخاطر بها لكل صفقة %
@@ -87,6 +93,7 @@ class TradingConfig:
             "paper_slippage_pct": self.paper_slippage_pct,
             "monitored_pairs": self.monitored_pairs,
             "timeframe": self.timeframe,
+            "htf_timeframe": self.htf_timeframe,
             "rsi_oversold": self.rsi_oversold,
             "rsi_overbought": self.rsi_overbought,
             "ema_fast": self.ema_fast,
@@ -99,6 +106,11 @@ class TradingConfig:
             "stop_loss_pct": self.stop_loss_pct,
             "trailing_stop_activation_pct": self.trailing_stop_activation_pct,
             "trailing_stop_callback_pct": self.trailing_stop_callback_pct,
+            "atr_stop_mult": self.atr_stop_mult,
+            "atr_tp_mult": self.atr_tp_mult,
+            "min_rr": self.min_rr,
+            "trail_activation_atr": self.trail_activation_atr,
+            "trail_distance_atr": self.trail_distance_atr,
             "risk_per_trade_pct": self.risk_per_trade_pct,
             "max_open_positions": self.max_open_positions,
             "daily_loss_limit_pct": self.daily_loss_limit_pct,

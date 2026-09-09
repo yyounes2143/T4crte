@@ -1,3 +1,7 @@
+"""
+ملاحظة هامة: هذا الملف (ai_advisor.py) مخصص للعرض والتحليل في واجهة المستخدم فقط.
+لا يتخذ هذا الملف قرارات تنفيذ الصفقات التلقائية؛ قرارات التنفيذ تعتمد على strategy.py.
+"""
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Tuple, Optional
