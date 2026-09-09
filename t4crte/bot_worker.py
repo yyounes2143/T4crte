@@ -78,6 +78,11 @@ class AutonomousTradingWorker:
 
     def _run_loop(self):
         logger.info("بدء حلقة المراقبة والتنفيذ المستمرة...")
+        try:
+            self.engine.reconcile_on_startup()
+        except Exception as rec_err:
+            logger.error(f"خطأ أثناء reconcile_on_startup: {rec_err}")
+
         last_scanner_time = time.time()
         while not self._stop_event.is_set():
             cycle_start = time.time()

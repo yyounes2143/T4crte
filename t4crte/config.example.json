@@ -1,6 +1,7 @@
 {
     "exchange_id": "bybit",
     "is_paper_trading": true,
+    "use_testnet": false,
     "initial_balance": 4.0,
     "trade_amount_usdt": 2.0,
     "max_open_trades": 2,
