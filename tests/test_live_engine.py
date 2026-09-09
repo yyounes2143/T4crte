@@ -20,7 +20,9 @@ def test_create_order_timeout_then_found_in_closed_orders(tmp_path):
     engine = TradingEngine(db_path=db_file)
     mock_exchange = MagicMock()
     engine._exchange = mock_exchange
-    engine.exchange_rules._exchange = mock_exchange
+    engine.exchange_rules.exchange = mock_exchange
+    mock_exchange.amount_to_precision.side_effect = lambda symbol, amount: f"{float(amount):.8f}"
+    mock_exchange.price_to_precision.side_effect = lambda symbol, price: f"{float(price):.2f}"
 
     config.is_paper_trading = False
 
@@ -135,7 +137,9 @@ def test_sl_order_missing_in_open_orders_causes_immediate_close(tmp_path):
     engine = TradingEngine(db_path=db_file)
     mock_exchange = MagicMock()
     engine._exchange = mock_exchange
-    engine.exchange_rules._exchange = mock_exchange
+    engine.exchange_rules.exchange = mock_exchange
+    mock_exchange.amount_to_precision.side_effect = lambda symbol, amount: f"{float(amount):.8f}"
+    mock_exchange.price_to_precision.side_effect = lambda symbol, price: f"{float(price):.2f}"
 
     config.is_paper_trading = False
 

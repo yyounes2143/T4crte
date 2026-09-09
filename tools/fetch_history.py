@@ -96,7 +96,8 @@ def main():
 
     exchange = get_working_exchange()
 
-    data_dir = os.path.join(project_root, "data")
+    # نفس المجلد الذي تقرأ منه الواجهة والاختبار الرجعي (t4crte/data)
+    data_dir = os.path.join(project_root, "t4crte", "data")
     os.makedirs(data_dir, exist_ok=True)
 
     # 1. Fetch 3000 candles of 5m

@@ -279,6 +279,16 @@ class BackgroundWorker:
                 f"إجمالي PnL: {portfolio['total_pnl']:+.4f}$"
             )
 
+        # 3. Kill Switch تلقائي عند تجاوز حد أخطاء API في الساعة الأخيرة
+        if not self._engine.risk_manager.kill_switch:
+            try:
+                max_api_errs = self._engine.risk_manager.cfg.max_api_errors_per_hour
+                if self._engine.risk_manager.count_api_errors_last_hour(datetime.now(timezone.utc)) > max_api_errs:
+                    logger.error("🚨 تجاوز عدد أخطاء API الحد المسموح — تفعيل Kill Switch تلقائي")
+                    self._engine.execute_kill_switch("تجاوز عدد أخطاء API في الساعة الأخيرة (تلقائي)")
+            except Exception as kill_err:
+                logger.error(f"خطأ أثناء فحص حد أخطاء API: {kill_err}")
+
         # حساب زمن الدورة ومقارنته بالفريم الزمني
         cycle_duration_ms = int((time.time() - cycle_start) * 1000)
         from trading_engine import _timeframe_to_seconds

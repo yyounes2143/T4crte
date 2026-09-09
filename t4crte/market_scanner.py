@@ -33,10 +33,12 @@ class MarketOpportunityScanner:
         self,
         pairs: Optional[List[str]] = None,
         max_pairs: int = 15,
-        timeframe: str = "15m"
+        timeframe: str = "15m",
+        stop_event: Optional[Any] = None
     ) -> List[Dict[str, Any]]:
         """
         مسح مجموعة من العملات واحتساب درجات الفرص والزخم لكل منها.
+        يمكن تمرير stop_event (threading.Event) لإيقاف المسح عند إشارته.
         """
         # إذا لم يتم تحديد أزواج، استخدم قائمة العملات الشعبية ومراقبة المحفظة
         if not pairs:
@@ -48,6 +50,10 @@ class MarketOpportunityScanner:
         results = []
 
         for pair in pairs:
+            # احترام أمر الإيقاف أثناء المسح الدوري
+            if stop_event is not None and stop_event.is_set():
+                logger.info("تم إيقاف مسح الفرص حسب stop_event.")
+                break
             try:
                 # 1. جلب بيانات الشموع والمؤشرات
                 df = self.engine.fetch_market_candles(pair, timeframe=timeframe, limit=250)
