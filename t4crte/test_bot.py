@@ -28,7 +28,7 @@ from ai_advisor import AIAdvisor
 from trading_engine import TradingEngine
 
 
-def _create_mock_candles(rows: int = 60, base_price: float = 60000.0) -> pd.DataFrame:
+def _create_mock_candles(rows: int = 250, base_price: float = 60000.0) -> pd.DataFrame:
     """إنشاء بيانات شموع وهمية للاختبار بدون اتصال بالإنترنت"""
     np.random.seed(42)
     timestamps = pd.date_range("2025-01-01", periods=rows, freq="15min")

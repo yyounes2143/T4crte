@@ -5,6 +5,7 @@ from typing import Optional
 from config import config, TradingConfig
 from trading_engine import TradingEngine
 from universal_ai import UniversalAIClient
+from indicators import drop_forming_candle
 from logger import setup_logger
 
 logger = setup_logger("worker", log_file="worker.log")
@@ -89,6 +90,7 @@ class AutonomousTradingWorker:
                             candles = self.engine.fetch_market_candles(pair, timeframe=current_cfg.timeframe, limit=250)
                             if candles.empty:
                                 continue
+                            candles = drop_forming_candle(candles, current_cfg.timeframe)
 
                             # Analyze with configured AI
                             ai_res = UniversalAIClient.analyze_market_with_llm(
