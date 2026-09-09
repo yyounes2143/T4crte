@@ -254,7 +254,7 @@ class TradingEngine:
             conn.commit()
 
     @_retry_on_network_error(max_retries=3, base_delay=2.0)
-    def fetch_market_candles(self, pair: str, timeframe: str = "15m", limit: int = 60) -> pd.DataFrame:
+    def fetch_market_candles(self, pair: str, timeframe: str = "15m", limit: int = 250) -> pd.DataFrame:
         """جلب بيانات الشموع الحية من المنصة مع حساب المؤشرات الفنية"""
         try:
             ohlcv = self._exchange.fetch_ohlcv(pair, timeframe=timeframe, limit=limit)

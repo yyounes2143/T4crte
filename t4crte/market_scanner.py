@@ -50,7 +50,7 @@ class MarketOpportunityScanner:
         for pair in pairs:
             try:
                 # 1. جلب بيانات الشموع والمؤشرات
-                df = self.engine.fetch_market_candles(pair, timeframe=timeframe, limit=50)
+                df = self.engine.fetch_market_candles(pair, timeframe=timeframe, limit=250)
                 if df.empty or len(df) < 25:
                     continue
 

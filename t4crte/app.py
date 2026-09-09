@@ -413,7 +413,7 @@ with tab_live:
                 st.toast("تم تحديث وضع التداول التلقائي!", icon="⚙️")
 
         # Fetch live candles & analyze with configured AI
-        candles_df = engine.fetch_market_candles(curr_active_pair, timeframe=config.timeframe, limit=70)
+        candles_df = engine.fetch_market_candles(curr_active_pair, timeframe=config.timeframe, limit=250)
         ai_res = UniversalAIClient.analyze_market_with_llm(
             candles_df=candles_df,
             pair=curr_active_pair,
@@ -937,7 +937,7 @@ with tab_backtest:
     with bt_c1:
         bt_pair = st.selectbox("الزوج:", config.monitored_pairs, key="bt_pair")
     with bt_c2:
-        bt_candles = st.number_input("عدد الشموع التاريخية:", min_value=100, max_value=500, value=200, step=50, key="bt_candles")
+        bt_candles = st.number_input("عدد الشموع التاريخية:", min_value=250, max_value=1000, value=250, step=50, key="bt_candles")
     with bt_c3:
         bt_balance = st.number_input("الرصيد الابتدائي ($):", min_value=10.0, max_value=10000.0, value=100.0, step=10.0, key="bt_balance")
     with bt_c4:

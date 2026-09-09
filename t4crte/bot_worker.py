@@ -86,7 +86,7 @@ class AutonomousTradingWorker:
                                 continue
 
                             # Fetch market data
-                            candles = self.engine.fetch_market_candles(pair, timeframe=current_cfg.timeframe, limit=60)
+                            candles = self.engine.fetch_market_candles(pair, timeframe=current_cfg.timeframe, limit=250)
                             if candles.empty:
                                 continue
 
