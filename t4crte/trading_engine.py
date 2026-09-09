@@ -146,11 +146,12 @@ class TradingEngine:
                         exit_time TEXT,
                         is_paper INTEGER DEFAULT 1,
                         entry_fee REAL DEFAULT 0.0,
-                        exit_fee REAL DEFAULT 0.0
+                        exit_fee REAL DEFAULT 0.0,
+                        atr_at_entry REAL DEFAULT 0.0
                     )
                 """)
 
-                # أضف أعمدة DB الجديدة (entry_fee, exit_fee) بطريقة آمنة
+                # أضف أعمدة DB الجديدة (entry_fee, exit_fee, atr_at_entry) بطريقة آمنة
                 try:
                     cursor.execute("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0.0")
                 except sqlite3.OperationalError:
@@ -158,6 +159,11 @@ class TradingEngine:
 
                 try:
                     cursor.execute("ALTER TABLE trades ADD COLUMN exit_fee REAL DEFAULT 0.0")
+                except sqlite3.OperationalError:
+                    pass
+
+                try:
+                    cursor.execute("ALTER TABLE trades ADD COLUMN atr_at_entry REAL DEFAULT 0.0")
                 except sqlite3.OperationalError:
                     pass
 
@@ -648,7 +654,16 @@ class TradingEngine:
                     """, (1 if is_running else 0, now, message))
                 conn.commit()
 
-    def open_position(self, pair: str, current_price: float, amount_usdt: float, is_paper: bool = True) -> Tuple[Optional[int], str]:
+    def open_position(
+        self,
+        pair: str,
+        current_price: float,
+        amount_usdt: float,
+        is_paper: bool = True,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        atr_at_entry: float = 0.0
+    ) -> Tuple[Optional[int], str]:
         """فتح صفقة شراء جديدة مع ضبط الوقف وأخذ الربح ومحاكاة الرسوم والانزلاق وتقييد المخاطر"""
         if current_price <= 0:
             return None, "سعر غير صالح"
@@ -766,19 +781,19 @@ class TradingEngine:
                         logger.error(msg)
                         return None, msg
 
-                take_profit = actual_price * (1 + (config.take_profit_pct / 100))
-                stop_loss = actual_price * (1 - (config.stop_loss_pct / 100))
-                trailing_stop = stop_loss
+                actual_stop_loss = stop_loss if (stop_loss is not None and stop_loss > 0) else actual_price * (1 - (config.stop_loss_pct / 100))
+                actual_take_profit = take_profit if (take_profit is not None and take_profit > 0) else actual_price * (1 + (config.take_profit_pct / 100))
+                trailing_stop = actual_stop_loss
 
                 cursor.execute("""
                     INSERT INTO trades (
                         pair, side, entry_price, current_price, amount, cost, highest_price,
                         trailing_stop_price, take_profit_price, stop_loss_price, status,
-                        entry_time, is_paper, entry_fee
-                    ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+                        entry_time, is_paper, entry_fee, atr_at_entry
+                    ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
                 """, (
                     pair, actual_price, actual_price, actual_qty, actual_cost, actual_price,
-                    trailing_stop, take_profit, stop_loss, now, 1 if is_paper else 0, entry_fee
+                    trailing_stop, actual_take_profit, actual_stop_loss, now, 1 if is_paper else 0, entry_fee, atr_at_entry
                 ))
                 trade_id = cursor.lastrowid
 
@@ -790,7 +805,7 @@ class TradingEngine:
                 logger.info(
                     f"📈 فتح صفقة {trade_mode} #{trade_id} | {pair} | "
                     f"سعر الدخول: {actual_price:.4f}$ | الكمية: {actual_qty} | "
-                    f"التكلفة: {actual_cost:.2f}$ | الرسوم: {entry_fee:.4f}$ | الهدف: {take_profit:.2f}$ | الوقف: {stop_loss:.2f}$"
+                    f"التكلفة: {actual_cost:.2f}$ | الرسوم: {entry_fee:.4f}$ | الهدف: {actual_take_profit:.2f}$ | الوقف: {actual_stop_loss:.2f}$"
                 )
                 try:
                     from notifier import TelegramNotifier
@@ -911,6 +926,7 @@ class TradingEngine:
             stop_loss = trade['stop_loss_price']
             cost = trade['cost']
             amount = trade['amount']
+            atr_at_entry = trade.get('atr_at_entry', 0.0) or 0.0
 
             current_price = self.get_current_price(pair)
             if current_price <= 0:
@@ -932,12 +948,23 @@ class TradingEngine:
                 highest_price = current_price
 
             # Check Trailing Stop activation and update
-            trailing_activated = trailing_stop > stop_loss  # الوقف المتحرك مفعّل إذا كان أعلى من وقف الخسارة الأصلي
-            if current_pnl_pct >= config.trailing_stop_activation_pct:
-                new_trailing_stop = highest_price * (1 - (config.trailing_stop_callback_pct / 100))
-                if new_trailing_stop > trailing_stop:
-                    trailing_stop = new_trailing_stop
-                    trailing_activated = True
+            trail_act_mult = getattr(config, 'trail_activation_atr', 1.0)
+            trail_dist_mult = getattr(config, 'trail_distance_atr', 1.0)
+
+            if atr_at_entry > 0:
+                act_price = entry_price + (trail_act_mult * atr_at_entry)
+                trailing_activated = (trailing_stop > stop_loss) or (highest_price >= act_price)
+                if trailing_activated:
+                    candidate_ts = highest_price - (trail_dist_mult * atr_at_entry)
+                    if candidate_ts > trailing_stop:
+                        trailing_stop = candidate_ts
+            else:
+                trailing_activated = trailing_stop > stop_loss
+                if current_pnl_pct >= config.trailing_stop_activation_pct:
+                    new_trailing_stop = highest_price * (1 - (config.trailing_stop_callback_pct / 100))
+                    if new_trailing_stop > trailing_stop:
+                        trailing_stop = new_trailing_stop
+                        trailing_activated = True
 
             # Check Exit Conditions
             if current_price >= take_profit:
