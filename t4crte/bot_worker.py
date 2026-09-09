@@ -190,6 +190,14 @@ class AutonomousTradingWorker:
                         f"⚠️ تحذير: استغرقت دورة المحرك {cycle_duration_ms} ميلي ثانية وهي تتجاوز 80% من فترة الفريم ({current_cfg.timeframe} = {tf_seconds}s)"
                     )
 
+                # 4. Kill Switch تلقائي عند تجاوز حد أخطاء API في الساعة الأخيرة
+                if not self.engine.risk_manager.kill_switch:
+                    now_dt = datetime.datetime.now(datetime.timezone.utc)
+                    max_api_errs = self.engine.risk_manager.cfg.max_api_errors_per_hour
+                    if self.engine.risk_manager.count_api_errors_last_hour(now_dt) > max_api_errs:
+                        logger.error("🚨 تجاوز عدد أخطاء API الحد المسموح — تفعيل Kill Switch تلقائي")
+                        self.engine.execute_kill_switch("تجاوز عدد أخطاء API في الساعة الأخيرة (تلقائي)")
+
                 self.engine.set_worker_state(
                     is_running=True,
                     cycle_inc=True,

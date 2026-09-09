@@ -421,18 +421,8 @@ class TradingEngine:
                         results.append({'id': cmd_id, 'status': 'FAILED', 'result': "رقم الصفقة غير موجود"})
 
                 elif cmd_type == 'KILL':
-                    self.risk_manager.kill_switch = True
-                    self.risk_manager.save_state()
-                    open_trades = self.get_open_trades()
-                    for t in open_trades:
-                        cp = self.get_current_price(t['pair'])
-                        self.close_position(t['id'], cp, "إغلاق طارئ يدوي (Emergency Kill Switch) 🚨")
-                    try:
-                        from notifier import TelegramNotifier
-                        TelegramNotifier.notify_kill_switch(len(open_trades))
-                    except Exception:
-                        pass
-                    res_msg = f"تم تفعيل Kill Switch وإغلاق كافة الصفقات ({len(open_trades)})"
+                    closed_count = self.execute_kill_switch("إغلاق طارئ يدوي من الواجهة (Emergency Kill Switch) 🚨")
+                    res_msg = f"تم تفعيل Kill Switch وإغلاق كافة الصفقات المفتوحة ({closed_count})"
                     self.update_command_status(cmd_id, 'DONE', res_msg)
                     results.append({'id': cmd_id, 'status': 'DONE', 'result': res_msg})
 
@@ -447,6 +437,39 @@ class TradingEngine:
                 results.append({'id': cmd_id, 'status': 'FAILED', 'result': err_msg})
 
         return results
+
+    def execute_kill_switch(self, reason: str) -> int:
+        """
+        تفعيل مفتاح التوقف الكامل:
+        1) إيقاف فتح أي صفقات جديدة (kill_switch في مدير المخاطر)
+        2) إغلاق جميع الصفقات المفتوحة فوراً
+        3) إرسال إشعار تيليجرام
+        يُستدعى من أمر KILL في الواجهة أو تلقائياً عند تجاوز حد أخطاء API.
+        """
+        with self._lock:
+            self.risk_manager.kill_switch = True
+            self.risk_manager.save_state()
+
+        open_trades = self.get_open_trades()
+        closed_count = 0
+        for t in open_trades:
+            cp = self.get_current_price(t['pair'])
+            if cp <= 0:
+                # آخر سعر معروف من قاعدة البيانات (لتجنب الإغلاق بسعر 0)
+                cp = float(t.get('current_price') or t.get('entry_price') or 0.0)
+            try:
+                self.close_position(t['id'], cp, f"Kill Switch: {reason}")
+                closed_count += 1
+            except Exception as e:
+                logger.error(f"فشل إغلاق الصفقة #{t['id']} أثناء Kill Switch: {e}")
+
+        logger.error(f"🚨 تم تفعيل Kill Switch: {reason} | صفقات أُغلقت: {closed_count}")
+        try:
+            from notifier import TelegramNotifier
+            TelegramNotifier.notify_kill_switch(closed_count)
+        except Exception:
+            pass
+        return closed_count
 
     def get_portfolio_state(self) -> Dict[str, Any]:
         """الحصول على الحالة اللحظية للمحفظة والرصيد"""
@@ -531,6 +554,53 @@ class TradingEngine:
         except Exception as e:
             logger.error(f"خطأ في جلب شموع {pair}: {e}", exc_info=True)
             return pd.DataFrame()
+
+    def fetch_history_candles(self, pair: str, timeframe: str = "5m", limit: int = 3000) -> pd.DataFrame:
+        """
+        جلب شموع تاريخية بالتصفح (Pagination عبر since) لتجاوز الحد الأقصى
+        لعدد الشموع في الطلب الواحد (عادة 1000) — يُستخدم في الاختبار الرجعي.
+        """
+        tf_ms = ccxt.Exchange.parse_timeframe(timeframe) * 1000
+        now_ms = int(time.time() * 1000)
+        since = now_ms - (limit * tf_ms)
+        all_rows = []
+
+        while len(all_rows) < limit:
+            batch_limit = min(1000, limit - len(all_rows) + 10)
+            try:
+                batch = self._call(
+                    self._exchange.fetch_ohlcv,
+                    pair,
+                    timeframe=timeframe,
+                    since=since,
+                    limit=batch_limit
+                )
+            except Exception as e:
+                logger.warning(f"توقف جلب التاريخي لـ {pair} عند {len(all_rows)} شمعة: {e}")
+                break
+            if not batch:
+                break
+            all_rows.extend(batch)
+            last_ts = int(batch[-1][0])
+            if last_ts + tf_ms >= now_ms:
+                break
+            since = last_ts + 1
+            # احترام معدل الطلبات للمنصة
+            try:
+                time.sleep(max(float(getattr(self._exchange, 'rateLimit', 200) or 200), 100) / 1000.0)
+            except Exception:
+                time.sleep(0.2)
+
+        if not all_rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df = df.drop_duplicates(subset=['timestamp']).sort_values('timestamp').reset_index(drop=True)
+        if len(df) > limit:
+            df = df.tail(limit).reset_index(drop=True)
+        df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+        logger.info(f"تم جلب {len(df)} شمعة تاريخية لـ {pair} ({timeframe})")
+        return TechnicalIndicators.enrich_dataframe(df)
 
     @_retry_on_network_error(max_retries=3, base_delay=1.5)
     def get_current_price(self, pair: str) -> float:
@@ -634,11 +704,23 @@ class TradingEngine:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_trade_history(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """جلب سجل الصفقات المغلقة"""
+        """جلب سجل الصفقات المغلقة (بما فيها الإغلاق الخارجي وفشل الوقف)"""
         with self._db_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM trades WHERE status = 'CLOSED' ORDER BY id DESC LIMIT ?", (limit,))
+            cursor.execute(
+                "SELECT * FROM trades WHERE status IN ('CLOSED', 'CLOSED_EXTERNAL', 'FAILED_SL_CLOSED') "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_commands(self, limit: int = 8) -> List[Dict[str, Any]]:
+        """جلب آخر أوامر الواجهة (OPEN/CLOSE/KILL) مع حالتها ونتيجتها"""
+        with self._db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM commands ORDER BY id DESC LIMIT ?", (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_recent_ai_logs(self, limit: int = 10) -> List[Dict[str, Any]]:
@@ -969,9 +1051,11 @@ class TradingEngine:
                             )
                         except Exception as e_sl:
                             logger.error(f"فشل إرسال أمر الوقف لـ {pair}: {e_sl}")
+                            self.log_order_event(client_order_id, pair, 'SELL_STOP', actual_qty, actual_stop_loss, 'FAILED', str(e_sl))
 
                     if sl_order:
                         sl_order_id = sl_order.get('id')
+                        self.log_order_event(client_order_id, pair, 'SELL_STOP', actual_qty, actual_stop_loss, 'PLACED')
 
                     # Verify SL order presence (up to 2 attempts)
                     sl_visible = False
@@ -993,6 +1077,9 @@ class TradingEngine:
                             emergency_sell_price = float(sell_order.get('average', sell_order.get('price', current_price)) or current_price)
                         except Exception as close_err:
                             logger.error(f"فشل الإغلاق الفوري بعد فشل أمر الوقف: {close_err}")
+                            self.log_order_event(client_order_id, pair, 'SELL', actual_qty, emergency_sell_price, 'EMERGENCY_CLOSE_FAILED', str(close_err))
+                        else:
+                            self.log_order_event(client_order_id, pair, 'SELL', actual_qty, emergency_sell_price, 'EMERGENCY_CLOSE')
 
                         cursor.execute("""
                             UPDATE trades SET
@@ -1076,6 +1163,23 @@ class TradingEngine:
 
                 cost, amount, entry_price, pair, entry_fee, is_paper_val, sl_order_id, client_order_id = row
                 is_paper_trade = bool(is_paper_val)
+
+                # حماية من إغلاق بسعر صفر/غير صالح (انقطاع شبكة أثناء Kill Switch مثلاً):
+                # الورقي: نتجاهل الإغلاق حتى يتوفر سعر حقيقي.
+                # الحقيقي: نستخدم آخر سعر معروف من قاعدة البيانات وننفذ البيع الفوري (market).
+                if exit_price is None or exit_price <= 0:
+                    last_known = 0.0
+                    cursor.execute("SELECT current_price FROM trades WHERE id = ?", (trade_id,))
+                    rk = cursor.fetchone()
+                    if rk:
+                        last_known = float(rk[0] or 0.0)
+                    if is_paper_trade:
+                        logger.warning(f"لا يمكن إغلاق الصفقة الورقية #{trade_id} بدون سعر صالح (exit_price={exit_price}). تم تجاهل الإغلاق.")
+                        return
+                    if last_known <= 0:
+                        last_known = float(entry_price or 0.0)
+                    logger.warning(f"سعر إغلاق غير صالح للصفقة الحقيقية #{trade_id}. استخدام آخر سعر معروف: {last_known}")
+                    exit_price = last_known
 
                 if is_paper_trade:
                     slippage = getattr(config, 'paper_slippage_pct', 0.05)
@@ -1269,7 +1373,7 @@ class TradingEngine:
 
             # Check Exit Conditions
             if current_price >= take_profit:
-                self.close_position(trade_id, current_price, f"تحقيق هدف الربح (+{config.take_profit_pct}%) 🎯")
+                self.close_position(trade_id, current_price, f"تحقيق هدف الربح عند {take_profit:.4f}$ 🎯")
                 events.append(f"تم إغلاق {pair} بنجاح عند {current_price:.2f}$ محققاً ربح +{current_pnl_pct:.2f}% 💰")
                 continue
 

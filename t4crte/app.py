@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Styling for Modern Dark Theme & Native RTL Arabic
+# Custom Styling for Modern Dark Theme & Native RTL Arabic (Responsive: Desktop + Mobile)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
@@ -35,28 +35,39 @@ st.markdown("""
         direction: rtl;
         text-align: right;
     }
-    
+
+    /* ===== Desktop Baseline ===== */
+    .block-container { padding-top: 1.6rem; padding-bottom: 2.5rem; }
+    h1 { font-size: 1.7rem; font-weight: 800; }
+    h2 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.8rem; }
+    h3 { font-weight: 700; }
+    hr { border-color: #2d3748; opacity: 0.6; }
+
     /* Top Bar Styling */
     .top-bar {
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
         border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 14px 20px;
+        border-radius: 14px;
+        padding: 16px 22px;
         margin-bottom: 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
     }
 
     /* Metric Cards */
     .metric-card {
         background: linear-gradient(135deg, #1e2638 0%, #151a28 100%);
         border: 1px solid #2d3748;
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 16px 20px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
         margin-bottom: 12px;
+        transition: border-color 0.2s;
     }
+    .metric-card:hover { border-color: #3b82f688; }
     .metric-title {
         color: #94a3b8;
         font-size: 13px;
@@ -67,6 +78,8 @@ st.markdown("""
         color: #f8fafc;
         font-size: 24px;
         font-weight: 700;
+        line-height: 1.3;
+        word-break: break-word;
     }
     .metric-pnl-positive {
         color: #10b981;
@@ -138,7 +151,7 @@ st.markdown("""
     .scanner-card {
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
         border: 1px solid #334155;
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 16px;
         margin-bottom: 14px;
         transition: transform 0.2s, border-color 0.2s;
@@ -152,10 +165,59 @@ st.markdown("""
         justify-content: space-between;
         align-items: center;
         margin-bottom: 10px;
+        gap: 8px;
+        flex-wrap: wrap;
     }
+
+    /* Tabs: horizontally swipeable on narrow screens */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        overflow-x: auto;
+        justify-content: flex-start;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+    }
+    .stTabs [data-baseweb="tab"] {
+        white-space: nowrap;
+        padding: 0.5rem 0.9rem;
+        font-size: 0.92rem;
+    }
+
+    /* Dataframes & code blocks */
+    [data-testid="stDataFrame"] { overflow-x: auto; }
+    pre { font-size: 0.82rem; line-height: 1.5; }
 
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+
+    /* ================= MOBILE (phones) ================= */
+    @media (max-width: 640px) {
+        .block-container {
+            padding-top: 0.8rem;
+            padding-bottom: 2rem;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+        /* Stack all multi-column rows vertically for readability */
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            row-gap: 10px !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stVerticalBlock"] {
+            flex: 0 0 100% !important;
+            max-width: 100% !important;
+        }
+        h1 { font-size: 1.3rem; }
+        h2 { font-size: 1.15rem; }
+        .top-bar { padding: 12px 14px; }
+        .top-bar h2 { font-size: 1.15rem; }
+        .metric-value { font-size: 19px; }
+        .ai-box { padding: 14px; }
+        .ai-box > div[style*="display: flex"] { flex-wrap: wrap; gap: 8px; }
+        .scanner-card-header { flex-direction: column; align-items: flex-start; }
+        .stTabs [data-baseweb="tab"] { font-size: 0.82rem; padding: 0.4rem 0.6rem; }
+        div[data-testid="stButton"] > button { width: 100%; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -186,6 +248,21 @@ def get_engine():
     return TradingEngine()
 
 engine = get_engine()
+
+def fmt_price(p):
+    """تنسيق ذكي للأسعار (يدعم العملات الدقيقة مثل PEPE و BTC الكبير)"""
+    try:
+        p = float(p or 0)
+    except Exception:
+        return "-"
+    if p <= 0:
+        return "-"
+    if p >= 1000:
+        return f"{p:,.2f}"
+    if p >= 1:
+        return f"{p:,.4f}"
+    s = f"{p:.10f}".rstrip("0").rstrip(".")
+    return s
 
 if "active_pair" not in st.session_state:
     st.session_state.active_pair = config.monitored_pairs[0] if config.monitored_pairs else "BTC/USDT"
@@ -220,13 +297,13 @@ with top_c2:
 
 # Main Navigation Tabs
 tab_live, tab_scanner, tab_ai_hub, tab_exchange, tab_telegram, tab_backtest, tab_settings = st.tabs([
-    "📊 لوحة المتابعة والصفقات (Live)",
-    "🎯 وكيل اقتناص الفرص (Scanner)",
-    "🤖 مركز ربط أي ذكاء اصطناعي (AI Hub)",
-    "🔌 ربط وفحص منصات التداول (Exchange API)",
-    "📱 إشعارات تيليجرام (Telegram Alerts)",
-    "🧪 الاختبار الرجعي (Backtest)",
-    "⚙️ إعدادات التداول والأمان (Settings)"
+    "📊 المتابعة الحية",
+    "🎯 اقتناص الفرص",
+    "🤖 ربط الذكاء الاصطناعي",
+    "🔌 ربط المنصة",
+    "📱 تيليجرام",
+    "🧪 الاختبار الرجعي",
+    "⚙️ الإعدادات"
 ])
 
 # ==============================================================================
@@ -315,15 +392,16 @@ with tab_live:
             config.save_to_json()
             st.rerun()
 
-    # Quick-select chips
+    # Quick-select chips (5×2 — readable on phones and desktops alike)
     popular_chips = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT", "PEPE/USDT", "SUI/USDT", "ADA/USDT", "NEAR/USDT", "AVAX/USDT"]
-    chip_cols = st.columns(len(popular_chips))
-    for idx, p_chip in enumerate(popular_chips):
-        with chip_cols[idx]:
-            is_cur = (p_chip == st.session_state.active_pair)
-            if st.button(p_chip.replace("/USDT", ""), key=f"chip_btn_{p_chip}", type="primary" if is_cur else "secondary", use_container_width=True):
-                st.session_state.active_pair = p_chip
-                st.rerun()
+    for row_start in range(0, len(popular_chips), 5):
+        chip_cols = st.columns(5)
+        for idx, p_chip in enumerate(popular_chips[row_start:row_start + 5]):
+            with chip_cols[idx]:
+                is_cur = (p_chip == st.session_state.active_pair)
+                if st.button(p_chip.replace("/USDT", ""), key=f"chip_btn_{p_chip}", type="primary" if is_cur else "secondary", use_container_width=True):
+                    st.session_state.active_pair = p_chip
+                    st.rerun()
 
     st.markdown("---")
 
@@ -342,6 +420,8 @@ with tab_live:
         # Live updates
         live_portfolio = engine.get_portfolio_state()
         curr_active_pair = st.session_state.active_pair
+        # إعادة حساب حالة المحرك داخل الـ fragment (القيمة الأصلية على مستوى الصفحة قد تصبح قديمة)
+        worker_running_live = get_worker_status()
 
         # Live header with indicator
         now_time_str = datetime.now().strftime("%H:%M:%S")
@@ -417,7 +497,12 @@ with tab_live:
                 st.toast("تم تحديث وضع التداول التلقائي!", icon="⚙️")
 
         # Fetch live candles & analyze with configured AI
-        candles_df = engine.fetch_market_candles(curr_active_pair, timeframe=config.timeframe, limit=250)
+        # ملاحظة: أي فشل شبكة (انقطاع إنترنت/حجب المنصة) لا يجب أن يسقط الصفحة — نتعامل معه بهدوء
+        try:
+            candles_df = engine.fetch_market_candles(curr_active_pair, timeframe=config.timeframe, limit=250)
+        except Exception as fetch_err:
+            candles_df = pd.DataFrame()
+            st.error(f"⚠️ تعذر جلب بيانات {curr_active_pair} حالياً ({type(fetch_err).__name__}). سيتم إعادة المحاولة في التحديث القادم.")
         candles_df = drop_forming_candle(candles_df, config.timeframe)
         ai_res = UniversalAIClient.analyze_market_with_llm(
             candles_df=candles_df,
@@ -428,8 +513,17 @@ with tab_live:
             take_profit_pct=config.take_profit_pct,
             stop_loss_pct=config.stop_loss_pct
         )
+        # تسجيل تحليلات الذكاء الاصطناعي مع كبح (فقط عند تغيّر الإشارة أو كل 5 دقائق) لتفادي تضخم قاعدة البيانات
         if not candles_df.empty:
-            engine.log_ai_analysis(curr_active_pair, ai_res)
+            _ai_log_key = (curr_active_pair, ai_res.signal_arabic, ai_res.market_sentiment)
+            _now_ts = time.time()
+            _last_log = st.session_state.get("ai_log_state", {})
+            if _last_log.get("key") != _ai_log_key or _now_ts - _last_log.get("ts", 0.0) > 300:
+                try:
+                    engine.log_ai_analysis(curr_active_pair, ai_res)
+                    st.session_state["ai_log_state"] = {"key": _ai_log_key, "ts": _now_ts}
+                except Exception:
+                    pass
 
         # Display AI Box
         st.markdown(f"""
@@ -473,7 +567,7 @@ with tab_live:
                         st.warning("⏳ يرجى الانتظار 3 ثوانٍ قبل تنفيذ صفقة جديدة لمنع التكرار.")
                     else:
                         st.session_state.last_buy_click = current_time
-                        if not worker_running:
+                        if not worker_running_live:
                             st.warning("شغّل المحرك الآلي أولاً")
                         elif live_portfolio['usdt_balance'] < config.trade_amount_usdt:
                             st.error("الرصيد المتاح غير كافٍ لفتح الصفقة!")
@@ -481,6 +575,32 @@ with tab_live:
                             cmd_id = engine.add_command('OPEN', pair=curr_active_pair, amount_usdt=config.trade_amount_usdt)
                             st.toast(f"تم إدراج أمر شراء لـ {curr_active_pair} (في الانتظار) ⏳", icon="📥")
                             st.rerun()
+
+        # حالة أوامر الواجهة الأخيرة (PENDING / DONE / FAILED)
+        try:
+            recent_cmds = engine.get_recent_commands(limit=6)
+        except Exception:
+            recent_cmds = []
+        if recent_cmds:
+            with st.expander("📨 حالة أوامر الواجهة (آخر 6 أوامر)"):
+                type_map = {"OPEN": "فتح شراء 🛒", "CLOSE": "إغلاق صفقة ❌", "KILL": "تسييل طارئ 🚨"}
+                status_map = {"PENDING": "⏳ قيد الانتظار", "DONE": "✅ تم التنفيذ", "FAILED": "❌ فشل"}
+                cmd_rows = []
+                for c in sorted(recent_cmds, key=lambda x: x["id"]):
+                    cmd_rows.append({
+                        "الوقت": c["created_at"],
+                        "النوع": type_map.get(c["type"], c["type"]),
+                        "الزوج": c.get("pair") or "-",
+                        "القيمة $": f"{c['amount_usdt']:.2f}" if c.get("amount_usdt") else "-",
+                        "الحالة": status_map.get(c["status"], c["status"]),
+                        "النتيجة": c.get("result") or "-",
+                    })
+                st.dataframe(pd.DataFrame(cmd_rows), use_container_width=True, hide_index=True)
+                latest_cmd = max(recent_cmds, key=lambda x: x["id"])
+                if latest_cmd["status"] == "FAILED":
+                    st.error(f"❌ آخر أمر فشل: {latest_cmd.get('result') or 'السبب غير معروف'}")
+                elif latest_cmd["status"] == "DONE":
+                    st.success(f"✅ آخر أمر نُفذ بنجاح: {latest_cmd.get('result') or ''}")
 
         # Chart Section
         if not candles_df.empty:
@@ -518,21 +638,18 @@ with tab_live:
             st.info("لا توجد صفقات مفتوحة حالياً. البوت في وضع المراقبة التلقائية لحماية رأس المال.")
         else:
             for t in open_trades:
-                c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 2, 2, 2, 2])
+                c1, c2, c3 = st.columns([2, 2, 2])
                 pnl_val = t['pnl_pct']
                 pnl_color = "#10b981" if pnl_val >= 0 else "#ef4444"
                 pnl_sign = "+" if pnl_val >= 0 else ""
                 with c1:
-                    st.markdown(f"**الزوج:** {t['pair']}<br><span style='color: #94a3b8; font-size: 12px;'>دخول: {t['entry_time']}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='metric-card'><div class='metric-title'>🪙 الزوج</div><div style='font-size: 18px; font-weight: 700;'>{t['pair']}</div><div style='color: #94a3b8; font-size: 12px; margin-top: 4px;'>دخول: {t['entry_time']}</div></div>", unsafe_allow_html=True)
                 with c2:
-                    st.markdown(f"**سعر الدخول:** {t['entry_price']:.2f}$<br>**السعر الحالي:** {t['current_price']:.2f}$", unsafe_allow_html=True)
+                    st.markdown(f"<div class='metric-card'><div class='metric-title'>💲 الأسعار</div><div style='font-size: 15px;'>الدخول: <b>{fmt_price(t['entry_price'])}$</b> ← الحالي: <b>{fmt_price(t['current_price'])}$</b></div><div style='color: #94a3b8; font-size: 12px; margin-top: 4px;'>القيمة: {t['cost']:.2f}$ | الكمية: {t['amount']:.6f}</div></div>", unsafe_allow_html=True)
                 with c3:
-                    st.markdown(f"**القيمة:** {t['cost']:.2f}$<br>**الكمية:** {t['amount']:.6f}", unsafe_allow_html=True)
-                with c4:
-                    st.markdown(f"**الربح اللحظي:**<br><span style='color: {pnl_color}; font-size: 18px; font-weight: bold;'>{pnl_sign}{t['pnl_amount']:.3f}$ ({pnl_sign}{pnl_val:.2f}%)</span>", unsafe_allow_html=True)
-                with c5:
-                    st.markdown(f"**الهدف:** {t['take_profit_price']:.2f}$<br>**الوقف المتحرك:** {t['trailing_stop_price']:.2f}$", unsafe_allow_html=True)
-                with c6:
+                    st.markdown(f"<div class='metric-card'><div class='metric-title'>📈 الربح اللحظي</div><div style='color: {pnl_color}; font-size: 18px; font-weight: bold;'>{pnl_sign}{t['pnl_amount']:.3f}$ ({pnl_sign}{pnl_val:.2f}%)</div><div style='color: #94a3b8; font-size: 12px; margin-top: 4px;'>🎯 الهدف: {fmt_price(t['take_profit_price'])}$ | 🛡️ المتحرك: {fmt_price(t['trailing_stop_price'])}$</div></div>", unsafe_allow_html=True)
+                close_bar = st.container()
+                with close_bar:
                     if st.button("❌ إغلاق يدوي فوري", key=f"close_{t['id']}", use_container_width=True):
                         engine.add_command('CLOSE', pair=t['pair'], trade_id=t['id'])
                         st.toast(f"تم إدراج أمر إغلاق صفقة #{t['id']} (في الانتظار) ⏳", icon="📥")
@@ -581,7 +698,8 @@ with tab_scanner:
     with col_sc3:
         scan_now_btn = st.button("🔍 مسح واقتناص الفرص الآن", type="primary", use_container_width=True)
 
-    if scan_now_btn or not latest_results:
+    # المسح يتم فقط عند الضغط على الزر (تجنب تحميل الصفحة أول مرة بمسح شبكة كامل)
+    if scan_now_btn:
         with st.spinner(f"جاري مسح واقتناص الفرص لأعلى {scan_limit} عملة في السوق..."):
             latest_results = scanner.scan_opportunities(max_pairs=scan_limit)
 
@@ -956,11 +1074,15 @@ with tab_backtest:
     with c_bt_btn2:
         run_wf_btn = st.button("🔄 تشغيل تحليل Walk-Forward (4 أجزاء)", use_container_width=True)
 
+    st.caption("💡 لحفظ بيانات تاريخية (3000 شمعة 5m + 1000 شمعة 1h) واختبار رجعي أسرع: شغّل `python tools/fetch_history.py BTC/USDT` — تُحفظ في مجلد `data/` وتُحمَّل تلقائياً.")
+
     # Function to get LTF and HTF data
     def get_backtest_data(pair, candles_limit):
         clean_sym = pair.replace("/", "_")
-        file_5m = os.path.join("data", f"{clean_sym}_5m.csv")
-        file_1h = os.path.join("data", f"{clean_sym}_1h.csv")
+        # مسار مطلق يعتمد على مجلد المشروع (لا يعتمد على مجلد التشغيل الحالي)
+        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+        file_5m = os.path.join(data_dir, f"{clean_sym}_5m.csv")
+        file_1h = os.path.join(data_dir, f"{clean_sym}_1h.csv")
 
         df_ltf = None
         df_htf = None
@@ -976,10 +1098,18 @@ with tab_backtest:
             except Exception:
                 pass
 
+        # عند غياب ملفات CSV: جلب بالتصفح (Pagination) لتجاوز حد الطلب الواحد (1000 شمعة)
         if df_ltf is None or df_ltf.empty:
-            df_ltf = engine.fetch_market_candles(pair, timeframe="5m", limit=candles_limit)
+            try:
+                df_ltf = engine.fetch_history_candles(pair, timeframe="5m", limit=int(candles_limit))
+            except Exception as e:
+                st.warning(f"تعذر الجلب المتصفح لشموع 5m: {e}. جرّب حفظ البيانات عبر: python tools/fetch_history.py {pair}")
+                df_ltf = pd.DataFrame()
         if df_htf is None or df_htf.empty:
-            df_htf = engine.fetch_market_candles(pair, timeframe="1h", limit=max(300, candles_limit // 3))
+            try:
+                df_htf = engine.fetch_history_candles(pair, timeframe="1h", limit=max(300, int(candles_limit) // 3))
+            except Exception:
+                df_htf = pd.DataFrame()
 
         return df_ltf, df_htf
 
@@ -1077,9 +1207,25 @@ with tab_settings:
         )
         is_paper_val = "محاكاة" in mode_choice
         if is_paper_val != config.is_paper_trading:
-            config.is_paper_trading = is_paper_val
+            if not is_paper_val:
+                st.error("⚠️ أنت على وشك التحويل إلى **التداول الحقيقي بأموالك الفعلية**. تأكد من: (1) إدخال مفاتيح API بصلاحية Spot فقط بدون سحب، (2) تجربة الوضع على Testnet أولاً.")
+            confirm_c1, confirm_c2 = st.columns(2)
+            if confirm_c1.button("✅ تأكيد تغيير وضع التداول", use_container_width=True):
+                config.is_paper_trading = is_paper_val
+                config.save_to_json()
+                st.rerun()
+            if confirm_c2.button("↩️ إلغاء والبقاء على الوضع الحالي", use_container_width=True):
+                st.rerun()
+
+        use_testnet_val = st.toggle(
+            "استخدام بيئة التجربة (Testnet Sandbox) للتداول الحقيقي",
+            value=bool(getattr(config, "use_testnet", False)),
+            help="عند التفعيل تُوجَّه أوامر التداول الحقيقي إلى testnet.bybit.com بدل الحساب الفعلي. احصل على مفاتيح testnet من testnet.bybit.com. يُطبق التغيير بعد إعادة التشغيل."
+        )
+        if use_testnet_val != bool(getattr(config, "use_testnet", False)):
+            config.use_testnet = use_testnet_val
             config.save_to_json()
-            st.rerun()
+            st.toast("تم تحديث وضع Testnet (يُطبق بعد إعادة التشغيل)", icon="⚙️")
 
         trade_size = st.number_input(
             "قيمة الصفقة الواحدة بالدولار (USDT):",
@@ -1104,6 +1250,21 @@ with tab_settings:
         max_api_errs = st.number_input("أقصى عدد أخطاء API في الساعة:", min_value=1, max_value=100, value=int(getattr(config, 'max_api_errors_per_hour', 10)))
         check_sec = st.number_input("فترة تكرار الفحص في الخلفية (بالثواني):", min_value=5, max_value=120, value=int(config.worker_interval_seconds))
 
+        st.markdown("---")
+        st.markdown("**إعدادات الاستراتيجية (نظام السوق + ATR):**")
+        _htf_options = ["1h", "2h", "4h"]
+        htf_tf_choice = st.selectbox(
+            "فريم التحليل الأعلى HTF (تحديد نظام السوق):",
+            _htf_options,
+            index=_htf_options.index(config.htf_timeframe) if config.htf_timeframe in _htf_options else 0,
+            key="htf_tf_select"
+        )
+        atr_stop_mult_val = st.number_input("مسافة وقف الخسارة من إشارة الدخول (× ATR):", min_value=0.2, max_value=5.0, value=float(config.atr_stop_mult), step=0.1)
+        atr_tp_mult_val = st.number_input("مسافة الهدف من إشارة الدخول (× ATR):", min_value=0.5, max_value=10.0, value=float(config.atr_tp_mult), step=0.1)
+        min_rr_val = st.number_input("أدنى نسبة عائد/مخاطرة R:R مقبولة:", min_value=0.5, max_value=5.0, value=float(config.min_rr), step=0.1)
+        trail_act_atr_val = st.number_input("تفعيل الوقف المتحرك عند ربح (× ATR):", min_value=0.2, max_value=5.0, value=float(config.trail_activation_atr), step=0.1)
+        trail_dist_atr_val = st.number_input("مسافة الوقف المتحرك عن قمة السعر (× ATR):", min_value=0.2, max_value=5.0, value=float(config.trail_distance_atr), step=0.1)
+
     if st.button("💾 حفظ كافة إعدادات التداول والمخاطر", type="primary", use_container_width=True):
         config.trade_amount_usdt = trade_size
         config.max_open_trades = max_trades
@@ -1119,6 +1280,12 @@ with tab_settings:
         config.pair_cooldown_minutes = cooldown_mins
         config.max_api_errors_per_hour = max_api_errs
         config.worker_interval_seconds = check_sec
+        config.htf_timeframe = htf_tf_choice
+        config.atr_stop_mult = atr_stop_mult_val
+        config.atr_tp_mult = atr_tp_mult_val
+        config.min_rr = min_rr_val
+        config.trail_activation_atr = trail_act_atr_val
+        config.trail_distance_atr = trail_dist_atr_val
         config.dashboard_password = dash_pwd.strip()
         if dash_pwd.strip():
             config.dashboard_password_hash = hashlib.sha256(dash_pwd.strip().encode('utf-8')).hexdigest()
@@ -1141,3 +1308,120 @@ with tab_settings:
             engine.add_command('KILL')
             st.toast("تم إدراج أمر التسييل الطارئ (Kill Switch) 🚨", icon="🚨")
             st.rerun()
+
+    # ------------------------------------------------------------------
+    # قسم التشخيص والسجل التقني: انسخ التقرير وأرسله للذكاء الاصطناعي عند أي خطأ
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🩺 التشخيص والسجل التقني (Diagnostics & Logs)")
+    st.caption("إذا حدث أي خطأ أو سلوك غير متوقع: ولّد التقرير التشخيصي وانسخه كاملاً (زر النسخ أعلى صندوق النص) وأرسله لأي نموذج ذكاء اصطناعي — سيشخّص لك المشكلة بدقة.")
+
+    _app_dir = os.path.dirname(os.path.abspath(__file__))
+
+    def _read_log_tail(name, n=60):
+        path = os.path.join(_app_dir, name)
+        if not os.path.exists(path):
+            return f"(الملف غير موجود: {name})"
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            tail = "".join(lines[-n:]).rstrip()
+            return tail if tail else "(الملف فارغ)"
+        except Exception as e:
+            return f"(تعذر القراءة: {e})"
+
+    def _read_log_errors(names, n=25):
+        out = []
+        for name in names:
+            path = os.path.join(_app_dir, name)
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
+            errs = [ln.rstrip() for ln in lines if ("| ERROR " in ln) or ("| CRITICAL " in ln) or ("Traceback" in ln) or ln.startswith("  File ")]
+            if errs:
+                out.append(f"--- {name} (آخر {min(n, len(errs))} خطأ) ---")
+                out.extend(errs[-n:])
+        return "\n".join(out) if out else "✅ لا توجد أخطاء (ERROR/CRITICAL/Traceback) في السجلات."
+
+    def build_diagnostic_report():
+        import platform
+        L = []
+        L.append("=" * 62)
+        L.append("T4crte Smart Bot — Full Diagnostic Report (تقرير تشخيصي كامل)")
+        L.append(f"وقت توليد التقرير: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        L.append("=" * 62)
+        L.append("")
+        L.append("[1] بيئة التشغيل (Runtime)")
+        L.append(f"    Python: {platform.python_version()} | OS: {platform.platform()} | Streamlit: {st.__version__}")
+        L.append("")
+        L.append("[2] وضع التشغيل (Mode)")
+        L.append(f"    وضع التداول: {'PAPER (محاكاة ورقية)' if config.is_paper_trading else 'LIVE (أموال حقيقية!)'}")
+        L.append(f"    Testnet: {'مفعّل' if bool(getattr(config, 'use_testnet', False)) else 'معطّل'}")
+        L.append(f"    المنصة: {config.exchange_id} | مفاتيح API: {'مدخلة' if config.api_key else 'غير مدخلة'}")
+        L.append(f"    التداول التلقائي: {'مفعّل' if config.auto_trading_enabled else 'معطّل'} | الفترة: {config.timeframe} | HTF: {config.htf_timeframe}")
+        L.append(f"    AI: {config.ai_provider} / {config.ai_model} | Telegram: {'مفعّل' if getattr(config, 'telegram_enabled', False) else 'معطّل'}")
+        L.append("")
+        L.append("[3] إعدادات المخاطرة والاستراتيجية (Risk & Strategy)")
+        L.append(f"    قيمة الصفقة: ${config.trade_amount_usdt} | أقصى متزامن: {config.max_open_trades} | الأزواج: {', '.join(config.monitored_pairs)}")
+        L.append(f"    TP: {config.take_profit_pct}% | SL: {config.stop_loss_pct}% | Risk/trade: {getattr(config, 'risk_per_trade_pct', 1.0)}% | حد يومي: {getattr(config, 'daily_loss_limit_pct', 3.0)}%")
+        L.append(f"    ATR: وقف ×{config.atr_stop_mult} | هدف ×{config.atr_tp_mult} | أدنى R:R: {config.min_rr} | متحرك: تفعيل ×{config.trail_activation_atr} / مسافة ×{config.trail_distance_atr}")
+        L.append(f"    أقصى خسائر متتالية: {getattr(config, 'max_consecutive_losses', 3)} | تهدئة الزوج: {getattr(config, 'pair_cooldown_minutes', 60)} دقيقة | حد أخطاء API/ساعة: {getattr(config, 'max_api_errors_per_hour', 10)} | دورة الفحص: كل {config.worker_interval_seconds} ث")
+        L.append("")
+        L.append("[4] حالة المحرك (Worker & Kill Switch)")
+        _ws = worker_state or {}
+        L.append(f"    يعمل الآن: {'نعم' if worker_running else 'لا'} | عدد الدورات: {_ws.get('cycle_count', '?')} | آخر نبضة: {_ws.get('last_heartbeat', '?')}")
+        L.append(f"    آخر رسالة: {_ws.get('last_message') or 'لا يوجد'}")
+        try:
+            L.append(f"    Kill Switch: {'⚠️ مفعل (لن تُفتح صفقات جديدة!)' if engine.risk_manager.kill_switch else 'غير مفعل'}")
+        except Exception:
+            L.append("    Kill Switch: (تعذر جلب الحالة)")
+        L.append("")
+        L.append("[5] المحفظة (Portfolio)")
+        try:
+            pf = engine.get_portfolio_state()
+            L.append(f"    USDT متاح: {pf['usdt_balance']:.2f}$ | إجمالي: {pf['total_equity']:.2f}$ | صافي PnL: {pf['total_pnl']:+.3f}$ ({pf['total_pnl_pct']:+.2f}%)")
+            L.append(f"    صفقات مفتوحة: {len(engine.get_open_trades())} | نسبة النجاح: {pf['win_rate']:.1f}%")
+        except Exception as e:
+            L.append(f"    (تعذر جلب المحفظة: {e})")
+        L.append("")
+        L.append("[6] آخر أوامر الواجهة (Commands)")
+        try:
+            cmds = engine.get_recent_commands(limit=5)
+            if cmds:
+                for c in sorted(cmds, key=lambda x: x["id"]):
+                    L.append(f"    #{c['id']} {c['type']} | {c['status']} | {c.get('result') or '-'} | {c['created_at']}")
+            else:
+                L.append("    (لا توجد أوامر)")
+        except Exception as e:
+            L.append(f"    (تعذر الجلب: {e})")
+        L.append("")
+        L.append("[7] آخر أسطر السجل (trading.log — آخر 40)")
+        L.append(_read_log_tail("trading.log", 40))
+        L.append("")
+        L.append("[8] آخر الأخطاء (trading.log + worker.log)")
+        L.append(_read_log_errors(["trading.log", "worker.log"], 25))
+        L.append("")
+        L.append("=" * 62)
+        L.append("تعليمات: أرسل هذا التقرير كاملاً للذكاء الاصطناعي مع وصف مختصر للمشكلة التي تواجهها.")
+        return "\n".join(L)
+
+    with st.expander("📋 التقرير التشخيصي الكامل (ولّد ← انسخ ← أرسل للذكاء الاصطناعي)"):
+        st.markdown("يشمل التقرير: وضع التشغيل، إعدادات المخاطرة، حالة المحرك والـ Kill Switch، المحفظة، آخر الأوامر، وذيل السجلات والأخطاء — كل ما يحتاجه أي مهندس أو نموذج ذكاء اصطناعي لتشخيص المشكلة.")
+        if st.button("⚙️ توليد التقرير التشخيصي", type="primary", use_container_width=True):
+            st.session_state["diag_report"] = build_diagnostic_report()
+            st.rerun()
+        _rep = st.session_state.get("diag_report")
+        if _rep:
+            st.code(_rep, language="text")
+            st.caption("💡 اضغط زر النسخ أعلى الصندوق لنسخ التقرير كاملاً، ثم ألصقه في محادثة الذكاء الاصطناعي.")
+
+    with st.expander("📄 السجل الحي المباشر (آخر 60 سطراً)"):
+        _lg1, _lg2 = st.tabs(["📁 trading.log (المحرك)", "📁 worker.log (العامل الخلفي)"])
+        with _lg1:
+            st.code(_read_log_tail("trading.log", 60), language="text")
+        with _lg2:
+            st.code(_read_log_tail("worker.log", 60), language="text")

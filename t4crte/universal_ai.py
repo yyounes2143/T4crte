@@ -209,8 +209,7 @@ class UniversalAIClient:
                 {"role": "user", "content": market_summary}
             ],
             "max_tokens": 800,
-            "temperature": 0.2,
-            "reasoning_effort": "max"
+            "temperature": 0.2
         }
 
         try:

@@ -55,6 +55,29 @@ run.bat
 - `trading_data.db`: قاعدة بيانات SQLite لحفظ الصفقات وسجل العمليات والرصيد تلقائياً.
 - `run.bat`: مشغل التشغيل السريع لويندوز.
 - `test_bot.py`: اختبارات شاملة للتأكد من سلامة النظام.
+- `strategy.py`: الاستراتيجية الجديدة (نظام السوق TREND_UP/RANGE/NO_TRADE + أهداف ATR ديناميكية).
+- `risk_manager.py`: مدير المخاطر (حجم الصفقة، الحد اليومي، الخسائر المتتالية، تهدئة الزوج، أخطاء API، Kill Switch).
+- `exchange_rules.py`: قواعد المنصة (الحد الأدنى للتكلفة/الكمية، الرسوم، تقريب الدقة، التحقق من الأوامر).
+- `backtest.py`: الاختبار الرجعي الواقعي (نفس كود الاستراتيجية + الرسوم + Walk-Forward).
+- `bot_worker.py` / `background_worker.py`: حلقا العمل الخلفية (الـ worker وحده يفتح ويغلق الصفقات؛ الواجهة تقرأ فقط وتُدخل أوامر).
+- `tools/fetch_history.py`: حفظ بيانات تاريخية (3000×5m + 1000×1h) في `t4crte/data/` للاختبار الرجعي.
+
+---
+
+## 🧪 الاختبارات (Pytest)
+من جذر المستودع:
+```bash
+python -m pytest -q
+```
+- `tests/test_indicators.py`: صحة وسرعة المؤشرات المتجهية (RSI/EMA/BB/ATR).
+- `tests/test_ai_advisor.py`: سلوك مستشار العرض (210 شمعة، NaN، النقاط).
+- `tests/test_paper_engine.py`: محاكاة واقعية (رسوم، انزلاق، حد أدنى، دقة الكمية).
+- `tests/test_commands.py`: أوامر الواجهة + سباق الكتابة المتوازي + كاش الشموع.
+- `tests/test_risk_manager.py`: حالات مدير المخاطر والحفظ/الاستعادة.
+- `tests/test_strategy.py`: أنظمة السوق + شروط الدخول + Trailing Stop.
+- `tests/test_backtest.py`: مطابقة الحساب اليدوي + الافتراض المتشائم + عدم تسرب المستقبل.
+- `tests/test_live_engine.py`: أوامر التنفيذ الحقيقي (TimeOut، فشل الوقف، Reconcile، إعادة المحاولة).
+- `tests/test_kill_switch.py`: حماية الإغلاق بسعر 0 + الـ Kill Switch التلقائي.
 
 ---
 

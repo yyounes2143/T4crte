@@ -252,6 +252,18 @@ class RiskManager:
         ]
         self.save_state()
 
+    def count_api_errors_last_hour(self, now: datetime.datetime) -> int:
+        """
+        عدد أخطاء API داخل الساعة الأخيرة (مع استبعاد الأخطاء الأقدم).
+        يُستخدم لتفعيل الـ Kill Switch التلقائي عند تجاوز الحد المسموح.
+        """
+        now_dt = self._parse_time(now)
+        with self._lock:
+            return sum(
+                1 for t in self.api_errors_last_hour
+                if (now_dt - self._parse_time(t)).total_seconds() <= 3600
+            )
+
     def reset_daily(self, now: datetime.datetime):
         now_dt = self._parse_time(now)
         self.today_realized_pnl_pct = 0.0

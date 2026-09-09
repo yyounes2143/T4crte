@@ -7,8 +7,10 @@
 
 import os
 import sys
+import time
 import unittest
 import gc
+import tempfile
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -365,15 +367,27 @@ class TestUniversalFeatures(unittest.TestCase):
         self.assertIn("error", res)
 
     def test_worker_lifecycle(self):
-        """اختبار دورة تشغيل وإيقاف عامل الخلفية"""
+        """اختبار دورة تشغيل وإيقاف عامل الخلفية (بمحرك معزول وقاعدة بيانات مؤقتة)"""
+        import bot_worker
         from bot_worker import AutonomousTradingWorker
-        worker = AutonomousTradingWorker.get_instance()
+        # نسخة جديدة تمامًا من المفردة، مع منع إنشاء محرك بقاعدة البيانات الحقيقية
+        AutonomousTradingWorker._instance = None
+        tmp_db = os.path.join(tempfile.gettempdir(), f"t4crte_worker_test_{os.getpid()}_{time.time_ns()}.db")
+        tmp_engine = TradingEngine(db_path=tmp_db)
+        with patch.object(bot_worker, "TradingEngine", return_value=tmp_engine):
+            worker = AutonomousTradingWorker()
         self.assertFalse(worker.is_running())
         with patch.object(worker.engine, 'fetch_market_candles', return_value=pd.DataFrame()):
             worker.start()
             self.assertTrue(worker.is_running())
             worker.stop()
             self.assertFalse(worker.is_running())
+        for ext in ["", "-wal", "-shm"]:
+            try:
+                if os.path.exists(tmp_db + ext):
+                    os.remove(tmp_db + ext)
+            except Exception:
+                pass
 
     def test_telegram_notifier_empty_credentials(self):
         """التحقق من معالجة بيانات تيليجرام الفارغة بأمان"""
@@ -406,7 +420,19 @@ class TestAgentsAndLiveFeatures(unittest.TestCase):
     """اختبارات الوكلاء الأذكياء الجدد وميزات البث المباشر واختيار العملات"""
 
     def setUp(self):
-        self.engine = TradingEngine()
+        # قاعدة بيانات مؤقتة معزولة — لتجنب تلويث trading_data.db الحقيقية أثناء تشغيل pytest
+        self._tmp_db = os.path.join(tempfile.gettempdir(), f"t4crte_agents_test_{os.getpid()}_{time.time_ns()}.db")
+        self.engine = TradingEngine(db_path=self._tmp_db)
+
+    def tearDown(self):
+        del self.engine
+        gc.collect()
+        for ext in ["", "-wal", "-shm"]:
+            try:
+                if os.path.exists(self._tmp_db + ext):
+                    os.remove(self._tmp_db + ext)
+            except Exception:
+                pass
 
     def test_normalize_and_validate_pair_formats(self):
         """التحقق من تصحيح ومعالجة صيغ العملات المختلفة"""
