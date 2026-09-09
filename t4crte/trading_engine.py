@@ -85,6 +85,59 @@ class TradingEngine:
         self._exchange = None
         self._init_exchange()
 
+    def _call(self, fn, *args, retries: int = 3, **kwargs):
+        """
+        تغليف كل استدعاء ccxt لحماية النظام وتطبيق الإعادة التلقائية للأخطاء القابلة للاسترداد فقط.
+        - يعيد المحاولة بـ backoff 1s/2s/4s لـ NetworkError و RateLimitExceeded فقط.
+        - لا يُعيد المحاولة لـ InsufficientFunds أو InvalidOrder أو أخطاء الأوامر الأخرى.
+        - يسجل كل خطأ لدى RiskManager.
+        """
+        for attempt in range(1, retries + 1):
+            try:
+                return fn(*args, **kwargs)
+            except (ccxt.NetworkError, ccxt.RequestTimeout, ccxt.ExchangeNotAvailable) as e:
+                self.risk_manager.on_api_error(datetime.datetime.now(datetime.timezone.utc))
+                if attempt == retries:
+                    logger.error(f"فشل {getattr(fn, '__name__', str(fn))} بعد {retries} محاولات network: {e}")
+                    raise
+                delay = 1.0 * (2 ** (attempt - 1))  # 1s, 2s, 4s
+                logger.warning(f"خطأ شبكة في CCXT (المحاولة {attempt}/{retries}): {e}. انتظار {delay}s...")
+                time.sleep(delay)
+            except ccxt.RateLimitExceeded as e:
+                self.risk_manager.on_api_error(datetime.datetime.now(datetime.timezone.utc))
+                if attempt == retries:
+                    logger.error(f"تجاوز حد الطلبات في {getattr(fn, '__name__', str(fn))}: {e}")
+                    raise
+                delay = 1.0 * (2 ** (attempt - 1))
+                logger.warning(f"تجاوز حد الطلبات. انتظار {delay}s...")
+                time.sleep(delay)
+            except Exception as e:
+                self.risk_manager.on_api_error(datetime.datetime.now(datetime.timezone.utc))
+                raise
+
+    def log_order_event(
+        self,
+        client_order_id: str,
+        pair: str,
+        side: str,
+        amount: float,
+        price: float,
+        status: str,
+        error: Optional[str] = None
+    ):
+        """تسجيل لوغ منظم بسطر JSON لكل أمر (إرسال/نجاح/فشل)"""
+        event_data = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "client_order_id": client_order_id,
+            "pair": pair,
+            "side": side,
+            "amount": amount,
+            "price": price,
+            "status": status,
+            "error": error
+        }
+        logger.info(f"ORDER_JSON: {json.dumps(event_data, ensure_ascii=False)}")
+
     @contextmanager
     def _db_connection(self):
         """مدير سياق آمن لفتح وإغلاق اتصالات SQLite مع وضع WAL ورخص القفل المتوازي"""
@@ -103,6 +156,8 @@ class TradingEngine:
             options = {
                 'enableRateLimit': True,
                 'timeout': 15000,
+                'adjustForTimeDifference': True,
+                'recvWindow': 20000,
             }
             if not config.is_paper_trading and config.api_key and config.api_secret:
                 options['apiKey'] = config.api_key
@@ -111,10 +166,31 @@ class TradingEngine:
                     options['password'] = config.api_passphrase
             
             self._exchange = exchange_class(options)
+            if getattr(config, 'use_testnet', False) and hasattr(self._exchange, 'set_sandbox_mode'):
+                self._exchange.set_sandbox_mode(True)
+
+            if hasattr(self._exchange, 'load_time_difference'):
+                try:
+                    self._exchange.load_time_difference()
+                except Exception as t_err:
+                    logger.warning(f"تعذر تحميل فرق الوقت مع المنصة: {t_err}")
+
             logger.info(f"تم تهيئة الاتصال بمنصة {config.exchange_id.upper()} بنجاح")
         except Exception as e:
             logger.error(f"خطأ في تهيئة المنصة ({config.exchange_id}): {e}. الرجوع إلى Bybit الافتراضية.")
-            self._exchange = ccxt.bybit({'enableRateLimit': True, 'timeout': 15000})
+            self._exchange = ccxt.bybit({
+                'enableRateLimit': True,
+                'timeout': 15000,
+                'adjustForTimeDifference': True,
+                'recvWindow': 20000,
+            })
+            if getattr(config, 'use_testnet', False) and hasattr(self._exchange, 'set_sandbox_mode'):
+                self._exchange.set_sandbox_mode(True)
+            if hasattr(self._exchange, 'load_time_difference'):
+                try:
+                    self._exchange.load_time_difference()
+                except Exception:
+                    pass
         self.exchange_rules = ExchangeRules(self._exchange)
 
     def init_db(self):
@@ -147,11 +223,13 @@ class TradingEngine:
                         is_paper INTEGER DEFAULT 1,
                         entry_fee REAL DEFAULT 0.0,
                         exit_fee REAL DEFAULT 0.0,
-                        atr_at_entry REAL DEFAULT 0.0
+                        atr_at_entry REAL DEFAULT 0.0,
+                        client_order_id TEXT,
+                        sl_order_id TEXT
                     )
                 """)
 
-                # أضف أعمدة DB الجديدة (entry_fee, exit_fee, atr_at_entry) بطريقة آمنة
+                # أضف أعمدة DB الجديدة (entry_fee, exit_fee, atr_at_entry, client_order_id, sl_order_id) بطريقة آمنة
                 try:
                     cursor.execute("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0.0")
                 except sqlite3.OperationalError:
@@ -164,6 +242,16 @@ class TradingEngine:
 
                 try:
                     cursor.execute("ALTER TABLE trades ADD COLUMN atr_at_entry REAL DEFAULT 0.0")
+                except sqlite3.OperationalError:
+                    pass
+
+                try:
+                    cursor.execute("ALTER TABLE trades ADD COLUMN client_order_id TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
+                try:
+                    cursor.execute("ALTER TABLE trades ADD COLUMN sl_order_id TEXT")
                 except sqlite3.OperationalError:
                     pass
 
@@ -333,6 +421,8 @@ class TradingEngine:
                         results.append({'id': cmd_id, 'status': 'FAILED', 'result': "رقم الصفقة غير موجود"})
 
                 elif cmd_type == 'KILL':
+                    self.risk_manager.kill_switch = True
+                    self.risk_manager.save_state()
                     open_trades = self.get_open_trades()
                     for t in open_trades:
                         cp = self.get_current_price(t['pair'])
@@ -342,7 +432,7 @@ class TradingEngine:
                         TelegramNotifier.notify_kill_switch(len(open_trades))
                     except Exception:
                         pass
-                    res_msg = f"تم إغلاق كافة الصفقات ({len(open_trades)})"
+                    res_msg = f"تم تفعيل Kill Switch وإغلاق كافة الصفقات ({len(open_trades)})"
                     self.update_command_status(cmd_id, 'DONE', res_msg)
                     results.append({'id': cmd_id, 'status': 'DONE', 'result': res_msg})
 
@@ -727,6 +817,9 @@ class TradingEngine:
 
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+                client_order_id = f"t4-{pair.replace('/', '')}-{int(time.time() * 1000)}"
+                sl_order_id = None
+
                 if is_paper:
                     slippage = getattr(config, 'paper_slippage_pct', 0.05)
                     fee_pct = getattr(config, 'paper_fee_pct', 0.1)
@@ -761,41 +854,195 @@ class TradingEngine:
                         logger.warning(f"رفض أمر التداول الحقيقي لـ {pair}: {val_msg}")
                         return None, val_msg
 
+                    qty = self.exchange_rules.round_amount(pair, raw_amount)
+
+                    # Save trade as SUBMITTING in DB first
+                    cursor.execute("""
+                        INSERT INTO trades (
+                            pair, side, entry_price, current_price, amount, cost, highest_price,
+                            trailing_stop_price, take_profit_price, stop_loss_price, status,
+                            entry_time, is_paper, entry_fee, atr_at_entry, client_order_id
+                        ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTING', ?, 0, 0.0, ?, ?)
+                    """, (
+                        pair, current_price, current_price, qty, qty * current_price, current_price,
+                        0.0, 0.0, 0.0, now, atr_at_entry, client_order_id
+                    ))
+                    temp_trade_id = cursor.lastrowid
+                    conn.commit()
+
+                    self.log_order_event(client_order_id, pair, 'BUY', qty, current_price, 'SUBMITTING')
+
+                    order = None
                     try:
-                        qty = self.exchange_rules.round_amount(pair, raw_amount)
-                        order = self._exchange.create_market_buy_order(pair, qty)
-                        actual_price = float(order.get('average', order.get('price', current_price)) or current_price)
-                        actual_qty = float(order.get('filled', qty) or qty)
-                        actual_cost = actual_qty * actual_price
-                        fee_rate = self.exchange_rules.taker_fee(pair)
-                        entry_fee = actual_cost * fee_rate
-                        total_deduction = actual_cost + entry_fee
-                        logger.info(f"✅ تم تنفيذ أمر شراء حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_price:.2f}$")
-                    except ccxt.BaseError as e:
-                        self.risk_manager.on_api_error(datetime.datetime.now(datetime.timezone.utc))
-                        msg = f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}"
-                        logger.error(msg)
-                        return None, msg
-                    except Exception as e:
-                        msg = f"❌ فشل تنفيذ أمر الشراء الحقيقي على المنصة: {e}"
-                        logger.error(msg)
-                        return None, msg
+                        order = self._call(
+                            self._exchange.create_order,
+                            symbol=pair,
+                            type='market',
+                            side='buy',
+                            amount=qty,
+                            params={'clientOrderId': client_order_id},
+                            retries=1
+                        )
+                    except (ccxt.NetworkError, ccxt.RequestTimeout) as net_err:
+                        self.log_order_event(client_order_id, pair, 'BUY', qty, current_price, 'TIMEOUT', str(net_err))
+                        # Check open orders and closed orders for client_order_id
+                        found_order = None
+                        try:
+                            open_orders = self._call(self._exchange.fetch_open_orders, symbol=pair) or []
+                            for o in open_orders:
+                                if o.get('clientOrderId') == client_order_id or o.get('info', {}).get('orderLinkId') == client_order_id:
+                                    found_order = o
+                                    break
+                        except Exception:
+                            pass
+
+                        if not found_order:
+                            try:
+                                closed_orders = self._call(self._exchange.fetch_closed_orders, symbol=pair) or []
+                                for o in closed_orders:
+                                    if o.get('clientOrderId') == client_order_id or o.get('info', {}).get('orderLinkId') == client_order_id:
+                                        found_order = o
+                                        break
+                            except Exception:
+                                pass
+
+                        if found_order:
+                            order = found_order
+                        else:
+                            cursor.execute("UPDATE trades SET status = 'FAILED' WHERE id = ?", (temp_trade_id,))
+                            conn.commit()
+                            self.log_order_event(client_order_id, pair, 'BUY', qty, current_price, 'FAILED', "Order not found after timeout")
+                            return None, f"فشل إرسال الأمر بسبب انقطاع الاتصال ولم يُعثر على الأمر: {net_err}"
+
+                    except Exception as exc:
+                        cursor.execute("UPDATE trades SET status = 'FAILED' WHERE id = ?", (temp_trade_id,))
+                        conn.commit()
+                        self.log_order_event(client_order_id, pair, 'BUY', qty, current_price, 'FAILED', str(exc))
+                        return None, f"❌ فشل تنفيذ أمر الشراء الحقيقي: {exc}"
+
+                    # Order successful or retrieved: fetch order details
+                    order_id = order.get('id')
+                    try:
+                        fetched_order = self._call(self._exchange.fetch_order, order_id, symbol=pair)
+                        if fetched_order:
+                            order = fetched_order
+                    except Exception as fe:
+                        logger.warning(f"تعذر جلب تفاصيل الأمر {order_id}: {fe}")
+
+                    actual_price = float(order.get('average', order.get('price', current_price)) or current_price)
+                    actual_qty = float(order.get('filled', qty) or qty)
+                    actual_cost = actual_qty * actual_price
+                    fee_info = order.get('fee', {}) or {}
+                    if 'cost' in fee_info and fee_info['cost'] is not None:
+                        entry_fee = float(fee_info['cost'])
+                    else:
+                        entry_fee = actual_cost * self.exchange_rules.taker_fee(pair)
+                    total_deduction = actual_cost + entry_fee
+
+                    self.log_order_event(client_order_id, pair, 'BUY', actual_qty, actual_price, 'SUCCESS')
 
                 actual_stop_loss = stop_loss if (stop_loss is not None and stop_loss > 0) else actual_price * (1 - (config.stop_loss_pct / 100))
                 actual_take_profit = take_profit if (take_profit is not None and take_profit > 0) else actual_price * (1 + (config.take_profit_pct / 100))
                 trailing_stop = actual_stop_loss
 
-                cursor.execute("""
-                    INSERT INTO trades (
-                        pair, side, entry_price, current_price, amount, cost, highest_price,
-                        trailing_stop_price, take_profit_price, stop_loss_price, status,
-                        entry_time, is_paper, entry_fee, atr_at_entry
-                    ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
-                """, (
-                    pair, actual_price, actual_price, actual_qty, actual_cost, actual_price,
-                    trailing_stop, actual_take_profit, actual_stop_loss, now, 1 if is_paper else 0, entry_fee, atr_at_entry
-                ))
-                trade_id = cursor.lastrowid
+                # Handle Stop Loss order placement on exchange for Live mode
+                if not is_paper:
+                    sl_order = None
+                    try:
+                        sl_order = self._call(
+                            self._exchange.create_order,
+                            symbol=pair,
+                            type='market',
+                            side='sell',
+                            amount=actual_qty,
+                            params={'stopLossPrice': actual_stop_loss}
+                        )
+                    except Exception:
+                        try:
+                            sl_order = self._call(
+                                self._exchange.create_order,
+                                symbol=pair,
+                                type='market',
+                                side='sell',
+                                amount=actual_qty,
+                                params={'triggerPrice': actual_stop_loss, 'reduceOnly': False}
+                            )
+                        except Exception as e_sl:
+                            logger.error(f"فشل إرسال أمر الوقف لـ {pair}: {e_sl}")
+
+                    if sl_order:
+                        sl_order_id = sl_order.get('id')
+
+                    # Verify SL order presence (up to 2 attempts)
+                    sl_visible = False
+                    for _ in range(2):
+                        try:
+                            open_orders = self._call(self._exchange.fetch_open_orders, symbol=pair) or []
+                            if any(o.get('id') == sl_order_id or o.get('info', {}).get('orderId') == sl_order_id for o in open_orders):
+                                sl_visible = True
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(0.5)
+
+                    if not sl_visible:
+                        logger.error(f"فشل وضع الوقف لـ {pair}. إغلاق الصفقة فوراً بأمر market sell لحماية المحفظة.")
+                        emergency_sell_price = current_price
+                        try:
+                            sell_order = self._call(self._exchange.create_order, symbol=pair, type='market', side='sell', amount=actual_qty)
+                            emergency_sell_price = float(sell_order.get('average', sell_order.get('price', current_price)) or current_price)
+                        except Exception as close_err:
+                            logger.error(f"فشل الإغلاق الفوري بعد فشل أمر الوقف: {close_err}")
+
+                        cursor.execute("""
+                            UPDATE trades SET
+                                status = 'FAILED_SL_CLOSED',
+                                entry_price = ?,
+                                current_price = ?,
+                                amount = ?,
+                                cost = ?,
+                                exit_price = ?,
+                                exit_reason = 'فشل وضع الوقف والإغلاق الفوري لحماية المحفظة',
+                                exit_time = ?
+                            WHERE id = ?
+                        """, (actual_price, actual_price, actual_qty, actual_cost, emergency_sell_price, now, temp_trade_id))
+                        conn.commit()
+                        return None, "فشل وضع الوقف"
+
+                    cursor.execute("""
+                        UPDATE trades SET
+                            entry_price = ?,
+                            current_price = ?,
+                            amount = ?,
+                            cost = ?,
+                            highest_price = ?,
+                            trailing_stop_price = ?,
+                            take_profit_price = ?,
+                            stop_loss_price = ?,
+                            status = 'OPEN',
+                            entry_fee = ?,
+                            sl_order_id = ?
+                        WHERE id = ?
+                    """, (
+                        actual_price, actual_price, actual_qty, actual_cost, actual_price,
+                        trailing_stop, actual_take_profit, actual_stop_loss, entry_fee,
+                        sl_order_id, temp_trade_id
+                    ))
+                    trade_id = temp_trade_id
+
+                else:
+                    cursor.execute("""
+                        INSERT INTO trades (
+                            pair, side, entry_price, current_price, amount, cost, highest_price,
+                            trailing_stop_price, take_profit_price, stop_loss_price, status,
+                            entry_time, is_paper, entry_fee, atr_at_entry, client_order_id, sl_order_id
+                        ) VALUES (?, 'BUY', ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?)
+                    """, (
+                        pair, actual_price, actual_price, actual_qty, actual_cost, actual_price,
+                        trailing_stop, actual_take_profit, actual_stop_loss, now, 1,
+                        entry_fee, atr_at_entry, client_order_id, sl_order_id
+                    ))
+                    trade_id = cursor.lastrowid
 
                 # Deduct total cost + fee from portfolio balance
                 cursor.execute("UPDATE portfolio SET usdt_balance = usdt_balance - ? WHERE id = 1", (total_deduction,))
@@ -821,13 +1068,13 @@ class TradingEngine:
         with self._lock:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT cost, amount, entry_price, pair, COALESCE(entry_fee, 0.0), is_paper FROM trades WHERE id = ? AND status = 'OPEN'", (trade_id,))
+                cursor.execute("SELECT cost, amount, entry_price, pair, COALESCE(entry_fee, 0.0), is_paper, sl_order_id, client_order_id FROM trades WHERE id = ? AND status = 'OPEN'", (trade_id,))
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(f"محاولة إغلاق صفقة غير موجودة أو مغلقة مسبقاً: #{trade_id}")
                     return
 
-                cost, amount, entry_price, pair, entry_fee, is_paper_val = row
+                cost, amount, entry_price, pair, entry_fee, is_paper_val, sl_order_id, client_order_id = row
                 is_paper_trade = bool(is_paper_val)
 
                 if is_paper_trade:
@@ -842,12 +1089,22 @@ class TradingEngine:
                     pnl_pct = (pnl_amount / entry_total) * 100 if entry_total > 0 else 0.0
                     actual_exit_price = fill_price
                 else:
+                    # Cancel existing SL order first if it exists
+                    if sl_order_id:
+                        try:
+                            self._call(self._exchange.cancel_order, sl_order_id, symbol=pair)
+                            logger.info(f"تم إلغاء أمر الوقف القديم #{sl_order_id} قبل إغلاق الصفقة")
+                        except Exception as c_err:
+                            logger.warning(f"تعذر إلغاء أمر الوقف القديم #{sl_order_id}: {c_err}")
+
                     try:
-                        order = self._exchange.create_market_sell_order(pair, amount)
+                        order = self._call(self._exchange.create_market_sell_order, pair, amount)
                         actual_exit_price = float(order.get('average', order.get('price', exit_price)) or exit_price)
                         logger.info(f"✅ تم تنفيذ أمر بيع حقيقي على المنصة | Order ID: {order.get('id')} | السعر الفعلي: {actual_exit_price:.2f}$")
+                        self.log_order_event(client_order_id or "", pair, 'SELL', amount, actual_exit_price, 'SUCCESS')
                     except Exception as e:
                         logger.error(f"❌ فشل تنفيذ أمر البيع الحقيقي: {e}. سيتم التسجيل بالسعر المقدّر.")
+                        self.log_order_event(client_order_id or "", pair, 'SELL', amount, exit_price, 'FAILED', str(e))
                         actual_exit_price = exit_price
 
                     fee_rate = self.exchange_rules.taker_fee(pair)
@@ -951,6 +1208,8 @@ class TradingEngine:
             trail_act_mult = getattr(config, 'trail_activation_atr', 1.0)
             trail_dist_mult = getattr(config, 'trail_distance_atr', 1.0)
 
+            old_trailing_stop = trailing_stop
+
             if atr_at_entry > 0:
                 act_price = entry_price + (trail_act_mult * atr_at_entry)
                 trailing_activated = (trailing_stop > stop_loss) or (highest_price >= act_price)
@@ -965,6 +1224,48 @@ class TradingEngine:
                     if new_trailing_stop > trailing_stop:
                         trailing_stop = new_trailing_stop
                         trailing_activated = True
+
+            # If trailing stop price was moved up in live mode: update order on exchange safely
+            sl_order_id = trade.get('sl_order_id')
+            is_paper_trade = bool(trade.get('is_paper', 1))
+            if not is_paper_trade and trailing_stop > old_trailing_stop:
+                cancel_success = False
+                if sl_order_id:
+                    try:
+                        self._call(self._exchange.cancel_order, sl_order_id, symbol=pair)
+                        cancel_success = True
+                    except Exception as cancel_err:
+                        logger.error(f"فشل إلغاء أمر الوقف القديم لـ {pair}: {cancel_err}")
+                else:
+                    cancel_success = True
+
+                if cancel_success:
+                    try:
+                        new_sl_order = self._call(
+                            self._exchange.create_order,
+                            symbol=pair,
+                            type='market',
+                            side='sell',
+                            amount=amount,
+                            params={'stopLossPrice': trailing_stop}
+                        )
+                        sl_order_id = new_sl_order.get('id')
+                    except Exception:
+                        try:
+                            new_sl_order = self._call(
+                                self._exchange.create_order,
+                                symbol=pair,
+                                type='market',
+                                side='sell',
+                                amount=amount,
+                                params={'triggerPrice': trailing_stop, 'reduceOnly': False}
+                            )
+                            sl_order_id = new_sl_order.get('id')
+                        except Exception as create_sl_err:
+                            logger.error(f"فشل إنشاء أمر الوقف الجديد لـ {pair}: {create_sl_err}")
+                else:
+                    # Cancel failed, revert trailing_stop in local logic to prevent two stops
+                    trailing_stop = old_trailing_stop
 
             # Check Exit Conditions
             if current_price >= take_profit:
@@ -992,12 +1293,137 @@ class TradingEngine:
                             highest_price = ?,
                             trailing_stop_price = ?,
                             pnl_amount = ?,
-                            pnl_pct = ?
+                            pnl_pct = ?,
+                            sl_order_id = ?
                         WHERE id = ?
-                    """, (current_price, highest_price, trailing_stop, current_pnl_amt, current_pnl_pct, trade_id))
+                    """, (current_price, highest_price, trailing_stop, current_pnl_amt, current_pnl_pct, sl_order_id, trade_id))
                     conn.commit()
 
         return events
+
+    def reconcile_on_startup(self):
+        """
+        عند تشغيل البوت: مطابقة صفقات OPEN في DB مع أرصدة المنصة وأوامرها المفتوحة.
+        - إن كانت كمية العملة الفعلية = 0 اعتبر الصفقة مغلقة خارجياً وحدّثها بحالة CLOSED_EXTERNAL بسعر آخر تداول.
+        - إن كانت الصفقة موجودة بدون أمر وقف، أعد وضع الوقف.
+        """
+        if config.is_paper_trading or not self._exchange:
+            return
+
+        logger.info("🔄 بدء التوفيق والمطابقة عند التشغيل (reconcile_on_startup)...")
+        open_trades = self.get_open_trades()
+        if not open_trades:
+            return
+
+        try:
+            balance = self._call(self._exchange.fetch_balance)
+        except Exception as e:
+            logger.error(f"فشل جلب الرصيد أثناء Reconcile: {e}")
+            return
+
+        for trade in open_trades:
+            if trade.get('is_paper', 1):
+                continue
+
+            pair = trade['pair']
+            trade_id = trade['id']
+            sl_order_id = trade.get('sl_order_id')
+            stop_loss = trade['stop_loss_price']
+            amount = trade['amount']
+            base_currency = pair.split('/')[0]
+
+            # Get actual base currency balance
+            coin_info = balance.get(base_currency, {}) if isinstance(balance, dict) else {}
+            total_coin = float(coin_info.get('total', 0.0) or 0.0) if isinstance(coin_info, dict) else 0.0
+
+            if total_coin <= 0:
+                logger.warning(f"الكمية الفعلية لـ {base_currency} تساوي 0. واعتبار الصفقة #{trade_id} مغلقة خارجياً.")
+                last_price = self.get_current_price(pair)
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                entry_price = trade['entry_price']
+                entry_fee = trade.get('entry_fee', 0.0) or 0.0
+                fee_rate = self.exchange_rules.taker_fee(pair)
+                exit_fee = amount * last_price * fee_rate
+                gross_return = (amount * last_price) - exit_fee
+                entry_total = (amount * entry_price) + entry_fee
+                pnl_amount = gross_return - entry_total
+                pnl_pct = ((last_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
+
+                with self._lock:
+                    with self._db_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE trades SET
+                                status = 'CLOSED_EXTERNAL',
+                                exit_price = ?,
+                                exit_reason = 'إغلاق خارجي على المنصة (CLOSED_EXTERNAL) 🔄',
+                                pnl_amount = ?,
+                                pnl_pct = ?,
+                                exit_time = ?,
+                                exit_fee = ?
+                            WHERE id = ?
+                        """, (last_price, pnl_amount, pnl_pct, now, exit_fee, trade_id))
+
+                        win_inc = 1 if pnl_amount >= 0 else 0
+                        loss_inc = 1 if pnl_amount < 0 else 0
+                        cursor.execute("""
+                            UPDATE portfolio SET
+                                usdt_balance = usdt_balance + ?,
+                                total_realized_pnl = total_realized_pnl + ?,
+                                win_trades = win_trades + ?,
+                                loss_trades = loss_trades + ?,
+                                updated_at = ?
+                            WHERE id = 1
+                        """, (gross_return, pnl_amount, win_inc, loss_inc, now))
+                        conn.commit()
+
+                now_dt = datetime.datetime.now(datetime.timezone.utc)
+                self.risk_manager.on_trade_closed(pair, pnl_amount, now_dt, pnl_pct)
+                continue
+
+            # Position exists on exchange: verify SL order
+            has_sl = False
+            try:
+                open_orders = self._call(self._exchange.fetch_open_orders, symbol=pair) or []
+                if sl_order_id and any(o.get('id') == sl_order_id or o.get('info', {}).get('orderId') == sl_order_id for o in open_orders):
+                    has_sl = True
+            except Exception as o_err:
+                logger.warning(f"تعذر جلب الأوامر المفتوحة لـ {pair}: {o_err}")
+
+            if not has_sl:
+                logger.warning(f"الصفقة #{trade_id} على {pair} موجودة بدون أمر وقف فعال. إعادة وضع أمر الوقف...")
+                new_sl_id = None
+                try:
+                    new_sl_order = self._call(
+                        self._exchange.create_order,
+                        symbol=pair,
+                        type='market',
+                        side='sell',
+                        amount=amount,
+                        params={'stopLossPrice': stop_loss}
+                    )
+                    new_sl_id = new_sl_order.get('id')
+                except Exception:
+                    try:
+                        new_sl_order = self._call(
+                            self._exchange.create_order,
+                            symbol=pair,
+                            type='market',
+                            side='sell',
+                            amount=amount,
+                            params={'triggerPrice': stop_loss, 'reduceOnly': False}
+                        )
+                        new_sl_id = new_sl_order.get('id')
+                    except Exception as sl_err:
+                        logger.error(f"فشل إعادة وضع أمر الوقف لـ {pair}: {sl_err}")
+
+                if new_sl_id:
+                    with self._lock:
+                        with self._db_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE trades SET sl_order_id = ? WHERE id = ?", (new_sl_id, trade_id))
+                            conn.commit()
 
     def log_ai_analysis(self, pair: str, analysis: AIAnalysisResult):
         """حفظ تحليل وتوصية الذكاء الاصطناعي في السجل"""

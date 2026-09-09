@@ -12,6 +12,7 @@ class TradingConfig:
     # 1. Exchange & Trading Mode
     exchange_id: str = "mexc"  # "bybit", "binance", "mexc", "kucoin", "gateio", "okx"
     is_paper_trading: bool = True  # True = Paper simulation, False = Real money execution
+    use_testnet: bool = False  # True = Use exchange testnet (sandbox) mode
     
     # Capital and Trade Sizing
     initial_balance: float = 4.0  # $4.00 starting capital
@@ -86,6 +87,7 @@ class TradingConfig:
         data = {
             "exchange_id": self.exchange_id,
             "is_paper_trading": self.is_paper_trading,
+            "use_testnet": self.use_testnet,
             "initial_balance": self.initial_balance,
             "trade_amount_usdt": self.trade_amount_usdt,
             "max_open_trades": self.max_open_trades,

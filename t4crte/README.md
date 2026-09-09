@@ -63,3 +63,4 @@ run.bat
 1. افتح الشريط الجانبي في لوحة التحكم.
 2. اختر **"تداول حقيقي (Live Trading)"**.
 3. أدخل مفاتيح API الخاصة بك (API Key & API Secret) من حسابك في Bybit أو Binance مع تفعيل صلاحية Spot Trading فقط (لا تقم بتفعيل السحب).
+4. لتجربة التداول الحقيقي على بيئة التجربة (Testnet): احصل على مفاتيح testnet من testnet.bybit.com وفّعل خيار `use_testnet`.
