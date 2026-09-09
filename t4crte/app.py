@@ -8,6 +8,7 @@ import os
 
 from config import config, TradingConfig
 from trading_engine import TradingEngine
+from indicators import drop_forming_candle
 from universal_ai import UniversalAIClient, AI_PRESETS
 from bot_worker import start_worker, stop_worker, get_worker_status
 from notifier import TelegramNotifier
@@ -414,6 +415,7 @@ with tab_live:
 
         # Fetch live candles & analyze with configured AI
         candles_df = engine.fetch_market_candles(curr_active_pair, timeframe=config.timeframe, limit=250)
+        candles_df = drop_forming_candle(candles_df, config.timeframe)
         ai_res = UniversalAIClient.analyze_market_with_llm(
             candles_df=candles_df,
             pair=curr_active_pair,

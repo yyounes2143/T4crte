@@ -13,7 +13,7 @@ from typing import Dict, Any, List
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import config
-from indicators import TechnicalIndicators
+from indicators import TechnicalIndicators, drop_forming_candle
 from ai_advisor import AIAdvisor
 from trading_engine import TradingEngine
 
@@ -31,7 +31,8 @@ class BacktestEngine:
         take_profit_pct: float = 1.8,
         stop_loss_pct: float = 1.2,
         trailing_activation_pct: float = 0.8,
-        trailing_callback_pct: float = 0.4
+        trailing_callback_pct: float = 0.4,
+        timeframe: str = "15m"
     ) -> Dict[str, Any]:
         """
         تشغيل اختبار رجعي على إطار بيانات الشموع
@@ -124,7 +125,7 @@ class BacktestEngine:
             # 2. فحص الدخول إذا لم تكن هناك صفقة مفتوحة ولديه رصيد
             elif balance >= trade_amount:
                 advisor_res = AIAdvisor.analyze(
-                    df=current_slice,
+                    df=drop_forming_candle(current_slice, timeframe),
                     pair=pair,
                     take_profit_pct=take_profit_pct,
                     stop_loss_pct=stop_loss_pct

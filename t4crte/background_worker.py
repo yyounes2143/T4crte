@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from logger import setup_logger
 from config import config
 from trading_engine import TradingEngine
+from indicators import drop_forming_candle
 
 logger = setup_logger("worker", log_file="worker.log")
 
@@ -192,6 +193,7 @@ class BackgroundWorker:
                         candles = self._engine.fetch_market_candles(pair, timeframe=current_cfg.timeframe, limit=250)
                         if candles.empty:
                             continue
+                        candles = drop_forming_candle(candles, current_cfg.timeframe)
 
                         ai_res = UniversalAIClient.analyze_market_with_llm(
                             candles_df=candles,

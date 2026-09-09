@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 from config import config
+
 @dataclass
 class AIAnalysisResult:
     signal: str  # "BUY", "SELL", "HOLD"
@@ -16,6 +17,8 @@ class AIAnalysisResult:
     reasons: list
     arabic_summary: str
     detailed_advice: str
+    buy_points: int = 0
+    sell_points: int = 0
 
 class AIAdvisor:
     """
@@ -24,20 +27,30 @@ class AIAdvisor:
     """
 
     @classmethod
-    def analyze(cls, df: pd.DataFrame, pair: str, take_profit_pct: float = 1.8, stop_loss_pct: float = 1.2) -> AIAnalysisResult:
-        if df.empty or len(df) < 30:
+    def analyze(
+        cls,
+        df: pd.DataFrame,
+        pair: str,
+        take_profit_pct: float = 1.8,
+        stop_loss_pct: float = 1.2,
+        analysis_time: Optional[float] = None
+    ) -> AIAnalysisResult:
+        if df.empty or len(df) < 210:
+            current_price = 0.0 if df.empty or 'close' not in df.columns else float(df.iloc[-1]['close'])
             return AIAnalysisResult(
                 signal="HOLD",
                 signal_arabic="بيانات غير كافية ⏳",
                 confidence=0,
                 safety_score=50,
                 market_sentiment="غير محدد",
-                current_price=0.0,
+                current_price=current_price,
                 recommended_tp=0.0,
                 recommended_sl=0.0,
-                reasons=["يتم تجميع الشموع الفنية لحساب المؤشرات بدقة..."],
+                reasons=["يلزم 200 شمعة على الأقل لحساب كافة المؤشرات بدقة."],
                 arabic_summary="جاري انتظار اكتمال بيانات الشموع للزوج.",
-                detailed_advice="يرجى الانتظار بضع ثوانٍ لجلب الشموع الكاملة."
+                detailed_advice="يرجى الانتظار بضع ثوانٍ لجلب الشموع الكاملة.",
+                buy_points=0,
+                sell_points=0
             )
 
         last_row = df.iloc[-1]
@@ -48,7 +61,7 @@ class AIAdvisor:
         ema_9 = float(last_row['ema_9'])
         ema_21 = float(last_row['ema_21'])
         ema_50 = float(last_row['ema_50'])
-        ema_200 = float(last_row['ema_200']) if 'ema_200' in df else ema_50
+        ema_200 = float(last_row['ema_200']) if 'ema_200' in df.columns else float('nan')
         bb_upper = float(last_row['bb_upper'])
         bb_lower = float(last_row['bb_lower'])
         bb_middle = float(last_row['bb_middle'])
@@ -56,20 +69,29 @@ class AIAdvisor:
         atr = float(last_row.get('atr', current_price * 0.01))
 
         # فحص القيم غير الصالحة
-        values_to_check = [rsi, ema_9, ema_21, ema_50, bb_upper, bb_lower, bb_middle]
+        values_to_check = [rsi, ema_9, ema_21, ema_50, ema_200, bb_upper, bb_lower, bb_middle]
         if any(pd.isna(v) or np.isinf(v) for v in values_to_check):
+            if pd.isna(ema_200) or np.isinf(ema_200):
+                sig_arabic = "بيانات غير كافية ⏳"
+                reason_msg = "يلزم 200 شمعة على الأقل لحساب كافة المؤشرات بدقة."
+            else:
+                sig_arabic = "بيانات غير مكتملة ⚠️"
+                reason_msg = "بعض المؤشرات الفنية تحتوي على قيم غير صالحة. يتم إعادة الحساب..."
+
             return AIAnalysisResult(
                 signal='HOLD',
-                signal_arabic='بيانات غير مكتملة ⚠️',
+                signal_arabic=sig_arabic,
                 confidence=0,
                 safety_score=50,
                 market_sentiment='غير محدد',
                 current_price=current_price,
                 recommended_tp=0.0,
                 recommended_sl=0.0,
-                reasons=['بعض المؤشرات الفنية تحتوي على قيم غير صالحة. يتم إعادة الحساب...'],
-                arabic_summary='تم اكتشاف قيم غير صالحة في المؤشرات. يرجى الانتظار.',
-                detailed_advice='سيتم تحديث البيانات تلقائياً في الدورة القادمة.'
+                reasons=[reason_msg],
+                arabic_summary='تم اكتشاف قيم غير صالحة أو غير مكتملة في المؤشرات. يرجى الانتظار.',
+                detailed_advice='سيتم تحديث البيانات تلقائياً في الدورة القادمة.',
+                buy_points=0,
+                sell_points=0
             )
 
         # 1. Macro Trend Determination
@@ -106,12 +128,13 @@ class AIAdvisor:
             reasons.append(f"مؤشر RSI ({rsi:.1f}) في منطقة مرتفعة تتطلب الحذر.")
 
         # Bollinger Bands Checks
-        if current_price <= bb_lower * 1.002:
-            buy_points += 25
-            reasons.append(f"السعر يلامس النطاق السفلي لبولينجر ({bb_lower:.2f})، وهو مستوى دعم فني صلب.")
-        elif current_price >= bb_upper * 0.998:
-            sell_points += 25
-            reasons.append(f"السعر يختبر النطاق العلوي لبولينجر ({bb_upper:.2f})، مقاومة قوية قد توقف الصعود.")
+        if bb_upper > bb_lower:
+            if current_price <= bb_lower * 1.002:
+                buy_points += 25
+                reasons.append(f"السعر يلامس النطاق السفلي لبولينجر ({bb_lower:.2f})، وهو مستوى دعم فني صلب.")
+            elif current_price >= bb_upper * 0.998:
+                sell_points += 25
+                reasons.append(f"السعر يختبر النطاق العلوي لبولينجر ({bb_upper:.2f})، مقاومة قوية قد توقف الصعود.")
 
         # Moving Averages Alignment
         if ema_9 > ema_21 and prev_row['ema_9'] <= prev_row['ema_21']:
@@ -133,8 +156,11 @@ class AIAdvisor:
                 sell_points += 10
 
         # Total Calculation
-        total_score = buy_points + trend_score
-        
+        total_score = buy_points - sell_points + trend_score
+
+        confidence = int(max(0, min(100, 50 + total_score / 2)))
+        safety_score = int(max(0, min(100, 100 - sell_points - (25 if trend_score < 0 else 0))))
+
         # Targets
         recommended_tp = current_price * (1 + (take_profit_pct / 100))
         recommended_sl = current_price * (1 - (stop_loss_pct / 100))
@@ -142,8 +168,6 @@ class AIAdvisor:
         if total_score >= 65 and sell_points < 20:
             signal = "BUY"
             signal_arabic = "شراء مؤكد 🟢"
-            confidence = min(98, 60 + total_score // 2)
-            safety_score = 90
             summary = f"الفرصة مهيأة لصفقة شراء ذات احتمالية نجاح عالية على {pair}. المؤشرات تدل على ارتداد إيجابي محمي بوقف خسارة."
             advice = (
                 f"يوصى بالدخول بسعر حوالي {current_price:.2f}$. "
@@ -153,28 +177,26 @@ class AIAdvisor:
         elif sell_points >= 45 or total_score < -20:
             signal = "SELL"
             signal_arabic = "بيع / جني أرباح 🔴"
-            confidence = min(95, 50 + sell_points)
-            safety_score = 65
             summary = f"إشارة لتهدئة المراكز على {pair}. السعر يواجه مقاومات فنية وتشبعاً شرائياً."
             advice = "إذا كانت لديك صفقة مفتوحة، يفضل جني الأرباح الآن أو تشديد وقف الخسارة المتحرك لحجز العوائد."
         else:
             signal = "HOLD"
             signal_arabic = "مراقبة وانتظار 🟡"
-            confidence = 50
-            safety_score = 95
             summary = f"السوق في حالة ترقب وتوازن نسبي على {pair}. نفضل البقاء بالدولار (USDT) لحين ظهور إشارة مؤكدة."
             advice = "وفقاً لاستراتيجية الحفاظ القصوى على رأس المال (4$)، لا ندخل في صفقات عشوائية حتى تتطابق شروط الأمان 100%."
 
         return AIAnalysisResult(
             signal=signal,
             signal_arabic=signal_arabic,
-            confidence=int(confidence),
-            safety_score=int(safety_score),
+            confidence=confidence,
+            safety_score=safety_score,
             market_sentiment=sentiment,
             current_price=current_price,
             recommended_tp=recommended_tp,
             recommended_sl=recommended_sl,
             reasons=reasons,
             arabic_summary=summary,
-            detailed_advice=advice
+            detailed_advice=advice,
+            buy_points=buy_points,
+            sell_points=sell_points
         )
