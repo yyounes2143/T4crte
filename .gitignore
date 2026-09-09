@@ -3,6 +3,7 @@ config.json
 *.db
 *.log
 worker_status.json
+data/
 .venv/
 __pycache__/
 *.pyc

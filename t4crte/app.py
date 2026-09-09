@@ -12,7 +12,8 @@ from indicators import drop_forming_candle
 from universal_ai import UniversalAIClient, AI_PRESETS
 from bot_worker import start_worker, stop_worker, get_worker_status
 from notifier import TelegramNotifier
-from backtest import BacktestEngine
+from backtest import BacktestEngine, walk_forward
+from risk_manager import RiskConfig
 from market_scanner import MarketOpportunityScanner
 from bybit_health_agent import BybitHealthValidatorAgent
 
@@ -397,8 +398,11 @@ with tab_live:
         st.markdown(f"### 🤖 تحليلات واستشارات الذكاء الاصطناعي لـ <span style='color: #38bdf8;'>{curr_active_pair}</span>", unsafe_allow_html=True)
         col_p_inf, col_at = st.columns([2, 2])
         with col_p_inf:
-            curr_p_live = engine.get_current_price(curr_active_pair)
-            live_price_display = f"{curr_p_live:.4f}$" if curr_p_live < 1 else f"{curr_p_live:.2f}$"
+            try:
+                curr_p_live = engine.get_current_price(curr_active_pair)
+            except Exception:
+                curr_p_live = 0.0
+            live_price_display = f"{curr_p_live:.4f}$" if (0 < curr_p_live < 1) else (f"{curr_p_live:.2f}$" if curr_p_live >= 1 else "غير متوفر")
             st.markdown(f"**السعر الفوري اللحظي:** <span style='color: #38bdf8; font-size: 20px; font-weight: bold;'>{live_price_display}</span>", unsafe_allow_html=True)
         with col_at:
             auto_trade_toggle = st.checkbox(
@@ -931,57 +935,131 @@ with tab_telegram:
 # TAB: BACKTEST
 # ==============================================================================
 with tab_backtest:
-    st.markdown("## 🧪 الاختبار الرجعي (Backtest)")
-    st.markdown("قم باختبار أداء استراتيجية الذكاء الاصطناعي على البيانات التاريخية قبل المخاطرة بأموال حقيقية.")
-    
-    bt_c1, bt_c2, bt_c3, bt_c4 = st.columns(4)
+    st.markdown("## 🧪 الاختبار الرجعي الواقعي (Realistic Backtest)")
+    st.markdown("قم باختبار أداء الاستراتيجية الكمية وإدارة المخاطر بنفس الكود الفعلي وحساب الرسوم والانزلاق السعري.")
+
+    bt_c1, bt_c2, bt_c3, bt_c4, bt_c5 = st.columns(5)
     with bt_c1:
-        bt_pair = st.selectbox("الزوج:", config.monitored_pairs, key="bt_pair")
+        bt_pair = st.selectbox("الزوج:", config.monitored_pairs if config.monitored_pairs else ["BTC/USDT"], key="bt_pair")
     with bt_c2:
-        bt_candles = st.number_input("عدد الشموع التاريخية:", min_value=250, max_value=1000, value=250, step=50, key="bt_candles")
+        bt_candles = st.number_input("عدد الشموع (5m):", min_value=250, max_value=5000, value=3000, step=250, key="bt_candles")
     with bt_c3:
-        bt_balance = st.number_input("الرصيد الابتدائي ($):", min_value=10.0, max_value=10000.0, value=100.0, step=10.0, key="bt_balance")
+        bt_balance = st.number_input("الرصيد الابتدائي ($):", min_value=10.0, max_value=100000.0, value=100.0, step=10.0, key="bt_balance")
     with bt_c4:
-        bt_trade_size = st.number_input("حجم الصفقة ($):", min_value=1.0, max_value=1000.0, value=10.0, step=1.0, key="bt_trade_size")
-        
-    if st.button("▶️ تشغيل الاختبار الرجعي", type="primary", use_container_width=True):
-        with st.spinner(f"جاري جلب آخر {bt_candles} شمعة لـ {bt_pair} وإجراء الاختبار..."):
-            bt_df = engine.fetch_market_candles(bt_pair, timeframe=config.timeframe, limit=bt_candles)
-            if bt_df.empty:
-                st.error("❌ فشل في جلب البيانات التاريخية.")
+        bt_fee = st.number_input("نسبة الرسوم %:", min_value=0.0, max_value=1.0, value=0.1, step=0.01, key="bt_fee") / 100.0
+    with bt_c5:
+        bt_slippage = st.number_input("نسبة الانزلاق %:", min_value=0.0, max_value=1.0, value=0.05, step=0.01, key="bt_slippage") / 100.0
+
+    c_bt_btn1, c_bt_btn2 = st.columns(2)
+    with c_bt_btn1:
+        run_bt_btn = st.button("▶️ تشغيل الاختبار الرجعي", type="primary", use_container_width=True)
+    with c_bt_btn2:
+        run_wf_btn = st.button("🔄 تشغيل تحليل Walk-Forward (4 أجزاء)", use_container_width=True)
+
+    # Function to get LTF and HTF data
+    def get_backtest_data(pair, candles_limit):
+        clean_sym = pair.replace("/", "_")
+        file_5m = os.path.join("data", f"{clean_sym}_5m.csv")
+        file_1h = os.path.join("data", f"{clean_sym}_1h.csv")
+
+        df_ltf = None
+        df_htf = None
+
+        if os.path.exists(file_5m):
+            try:
+                df_ltf = pd.read_csv(file_5m)
+            except Exception:
+                pass
+        if os.path.exists(file_1h):
+            try:
+                df_htf = pd.read_csv(file_1h)
+            except Exception:
+                pass
+
+        if df_ltf is None or df_ltf.empty:
+            df_ltf = engine.fetch_market_candles(pair, timeframe="5m", limit=candles_limit)
+        if df_htf is None or df_htf.empty:
+            df_htf = engine.fetch_market_candles(pair, timeframe="1h", limit=max(300, candles_limit // 3))
+
+        return df_ltf, df_htf
+
+    if run_bt_btn or run_wf_btn:
+        with st.spinner(f"جاري تجهيز البيانات وإجراء المحاكاة لـ {bt_pair}..."):
+            df_ltf, df_htf = get_backtest_data(bt_pair, bt_candles)
+
+            if df_ltf is None or df_ltf.empty:
+                st.error("❌ فشل في جلب بيانات الاختبار الرجعي.")
             else:
-                bt_results = BacktestEngine.run_backtest(
-                    df=bt_df,
-                    pair=bt_pair,
-                    initial_balance=bt_balance,
-                    trade_size=bt_trade_size,
-                    take_profit_pct=config.take_profit_pct,
-                    stop_loss_pct=config.stop_loss_pct,
-                    trailing_stop_activation_pct=config.trailing_stop_activation_pct,
-                    trailing_stop_callback_pct=config.trailing_stop_callback_pct
+                risk_c = RiskConfig(
+                    risk_per_trade_pct=getattr(config, 'risk_per_trade_pct', 1.0),
+                    daily_loss_limit_pct=getattr(config, 'daily_loss_limit_pct', 3.0),
+                    max_consecutive_losses=getattr(config, 'max_consecutive_losses', 3)
                 )
-                
-                st.markdown("### 📊 نتائج الأداء (KPIs)")
-                rk1, rk2, rk3, rk4, rk5 = st.columns(5)
-                with rk1:
-                    st.metric("نسبة النجاح (Win Rate)", f"{bt_results['win_rate']:.1f}%")
-                with rk2:
-                    st.metric("إجمالي الصفقات", str(bt_results['total_trades']))
-                with rk3:
-                    pnl_color = "normal" if bt_results['net_pnl'] >= 0 else "inverse"
-                    st.metric("صافي الربح (Net PnL)", f"{bt_results['net_pnl']:+.2f}$", delta_color=pnl_color)
-                with rk4:
-                    st.metric("عامل الربح (Profit Factor)", f"{bt_results['profit_factor']:.2f}")
-                with rk5:
-                    st.metric("أقصى تراجع (Max Drawdown)", f"{bt_results['max_drawdown_pct']:.2f}%")
-                    
-                st.markdown("### 📋 تفاصيل الصفقات المحاكاة")
-                if bt_results['trades']:
-                    df_trades = pd.DataFrame(bt_results['trades'])
-                    # Format dataframe for display
-                    st.dataframe(df_trades, use_container_width=True, hide_index=True)
-                else:
-                    st.info("لم يتم تنفيذ أي صفقات خلال هذه الفترة.")
+
+                if run_bt_btn:
+                    bt_results = BacktestEngine.run_backtest(
+                        df_ltf=df_ltf,
+                        df_htf=df_htf,
+                        initial_balance=bt_balance,
+                        fee_pct=bt_fee,
+                        slippage_pct=bt_slippage,
+                        risk_cfg=risk_c,
+                        strategy_cfg=config,
+                        pair=bt_pair
+                    )
+
+                    st.markdown("### 📊 نتائج الأداء المتقدمة (Realistic KPIs)")
+                    k1, k2, k3, k4 = st.columns(4)
+                    with k1:
+                        st.metric("إجمالي الصفقات (Total Trades)", str(bt_results['total_trades']))
+                    with k2:
+                        st.metric("نسبة النجاح (Win Rate)", f"{bt_results['win_rate']:.1f}%")
+                    with k3:
+                        pnl_color = "normal" if bt_results['net_pnl'] >= 0 else "inverse"
+                        st.metric("صافي الربح (Net PnL)", f"{bt_results['net_pnl']:+.4f}$ ({bt_results['net_pnl_pct']:+.2f}%)", delta_color=pnl_color)
+                    with k4:
+                        st.metric("معامل الربحية (Profit Factor)", f"{bt_results['profit_factor']:.2f}")
+
+                    k5, k6, k7, k8 = st.columns(4)
+                    with k5:
+                        st.metric("أقصى تراجع (Max Drawdown)", f"{bt_results['max_drawdown_pct']:.2f}%")
+                    with k6:
+                        st.metric("عائد الصفقة (Expectancy)", f"{bt_results['expectancy_per_trade']:+.4f}$")
+                    with k7:
+                        st.metric("متوسط R:R", f"{bt_results['avg_rr']:.2f}")
+                    with k8:
+                        st.metric("إجمالي الرسوم (Fees Paid)", f"{bt_results['fees_paid']:.4f}$")
+
+                    st.markdown("### 📋 سجل الصفقات المنفذة في المحاكاة")
+                    if bt_results['trades']:
+                        df_trades = pd.DataFrame(bt_results['trades'])
+                        st.dataframe(df_trades, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("لم يتم تنفيذ أي صفقات خلال هذه الفترة الزمنية.")
+
+                elif run_wf_btn:
+                    wf_res = walk_forward(
+                        df_ltf=df_ltf,
+                        df_htf=df_htf,
+                        n_splits=4,
+                        initial_balance=bt_balance,
+                        fee_pct=bt_fee,
+                        slippage_pct=bt_slippage,
+                        risk_cfg=risk_c,
+                        strategy_cfg=config,
+                        pair=bt_pair
+                    )
+
+                    st.markdown("### 🔄 نتائج تحليل Walk-Forward (4 أجزاء متتالية)")
+                    if wf_res.get("unstable_warning"):
+                        st.error("⚠️ تحذير: الاستراتيجية غير مستقرة (الربح الصافي سالب في أكثر من نصف الأجزاء)")
+                    else:
+                        st.success("✅ الاستراتيجية مستقرة عبر الفترات الزمنية الاختيارية.")
+
+                    if wf_res.get("splits"):
+                        df_wf = pd.DataFrame(wf_res["splits"])
+                        df_wf.columns = ['الجزء', 'تاريخ البداية', 'تاريخ النهاية', 'الصفقات', 'نسبة النجاح %', 'صافي الربح ($)', 'معامل الربحية', 'أقصى تراجع %', 'الرسوم ($)']
+                        st.dataframe(df_wf, use_container_width=True, hide_index=True)
 
 # ==============================================================================
 # TAB 4: SETTINGS & AUTONOMOUS BOT

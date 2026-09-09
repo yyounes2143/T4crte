@@ -10,7 +10,7 @@ load_dotenv()
 @dataclass
 class TradingConfig:
     # 1. Exchange & Trading Mode
-    exchange_id: str = "bybit"  # "bybit", "binance", "mexc", "kucoin", "gateio", "okx"
+    exchange_id: str = "mexc"  # "bybit", "binance", "mexc", "kucoin", "gateio", "okx"
     is_paper_trading: bool = True  # True = Paper simulation, False = Real money execution
     
     # Capital and Trade Sizing
